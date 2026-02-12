@@ -22,8 +22,7 @@ export interface ResourceInput {
   links: ResourceLinkInput[]
 }
 
-export const CATEGORIES = [
-  "All",
+export const DEFAULT_CATEGORY_SUGGESTIONS = [
   "General",
   "C++",
   "Rust",
@@ -39,4 +38,4 @@ export const CATEGORIES = [
   "Security",
 ] as const
 
-export type Category = (typeof CATEGORIES)[number]
+export type Category = string

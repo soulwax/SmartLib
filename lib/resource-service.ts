@@ -1,6 +1,7 @@
 import "server-only"
 
 import { hasDatabaseEnv } from "@/lib/env"
+import { loadLibraryResourcesFromFile } from "@/lib/library-parser"
 import {
   createMockResource,
   deleteMockResource,
@@ -17,8 +18,51 @@ import type { ResourceCard, ResourceInput } from "@/lib/resources"
 
 export type ResourceDataMode = "database" | "mock"
 
+let databaseBootstrap: Promise<void> | null = null
+
 function currentMode(): ResourceDataMode {
   return hasDatabaseEnv() ? "database" : "mock"
+}
+
+function toResourceInput(resource: ResourceCard): ResourceInput {
+  return {
+    category: resource.category,
+    links: resource.links.map((link) => ({
+      url: link.url,
+      label: link.label,
+      note: link.note ?? undefined,
+    })),
+  }
+}
+
+async function ensureDatabaseBootstrapped() {
+  if (databaseBootstrap !== null) {
+    await databaseBootstrap
+    return
+  }
+
+  databaseBootstrap = (async () => {
+    const existingResources = await listDbResources()
+    if (existingResources.length > 0) {
+      return
+    }
+
+    const libraryResources = loadLibraryResourcesFromFile()
+    if (libraryResources.length === 0) {
+      return
+    }
+
+    for (const resource of libraryResources) {
+      await createDbResource(toResourceInput(resource))
+    }
+  })()
+
+  try {
+    await databaseBootstrap
+  } catch (error) {
+    databaseBootstrap = null
+    throw error
+  }
 }
 
 export async function listResourcesService(): Promise<{
@@ -28,6 +72,8 @@ export async function listResourcesService(): Promise<{
   const mode = currentMode()
 
   if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
     return {
       mode,
       resources: await listDbResources(),

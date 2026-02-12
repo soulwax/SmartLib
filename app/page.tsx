@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 
-import type { Category, ResourceCard, ResourceInput } from "@/lib/resources"
+import type { ResourceCard, ResourceInput } from "@/lib/resources"
 import { AddResourceModal } from "@/components/add-resource-modal"
 import { CategorySidebar } from "@/components/category-sidebar"
 import { ResourceCardItem } from "@/components/resource-card"
@@ -43,7 +43,7 @@ async function readJson<T>(response: Response): Promise<T | null> {
 
 export default function Page() {
   const [resources, setResources] = useState<ResourceCard[]>([])
-  const [activeCategory, setActiveCategory] = useState<Category | "All">("All")
+  const [activeCategory, setActiveCategory] = useState<string | "All">("All")
   const [searchQuery, setSearchQuery] = useState("")
   const [modalOpen, setModalOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -66,6 +66,18 @@ export default function Page() {
     }
 
     return counts
+  }, [resources])
+
+  const categories = useMemo(() => {
+    const unique = new Set<string>()
+    for (const resource of resources) {
+      const category = resource.category.trim()
+      if (category.length > 0) {
+        unique.add(category)
+      }
+    }
+
+    return [...unique]
   }, [resources])
 
   const filteredResources = useMemo(() => {
@@ -127,6 +139,12 @@ export default function Page() {
   useEffect(() => {
     void fetchResources()
   }, [fetchResources])
+
+  useEffect(() => {
+    if (activeCategory !== "All" && !resourceCounts[activeCategory]) {
+      setActiveCategory("All")
+    }
+  }, [activeCategory, resourceCounts])
 
   const handleSave = useCallback(
     async (input: ResourceInput) => {
@@ -291,6 +309,7 @@ export default function Page() {
           aria-label="Category navigation"
         >
           <CategorySidebar
+            categories={categories}
             activeCategory={activeCategory}
             onCategoryChange={setActiveCategory}
             resourceCounts={resourceCounts}
@@ -306,6 +325,7 @@ export default function Page() {
               </SheetDescription>
             </SheetHeader>
             <CategorySidebar
+              categories={categories}
               activeCategory={activeCategory}
               onCategoryChange={(category) => {
                 setActiveCategory(category)
@@ -382,6 +402,7 @@ export default function Page() {
         onSave={handleSave}
         editingResource={editingResource}
         isSaving={isSaving}
+        categorySuggestions={categories}
       />
 
       <Toaster position="bottom-right" theme="dark" />

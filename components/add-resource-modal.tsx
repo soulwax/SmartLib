@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react"
 
-import { CATEGORIES } from "@/lib/resources"
+import { DEFAULT_CATEGORY_SUGGESTIONS } from "@/lib/resources"
 import type { ResourceCard, ResourceInput } from "@/lib/resources"
 import {
   Dialog,
@@ -29,9 +29,8 @@ interface AddResourceModalProps {
   onSave: (resource: ResourceInput) => Promise<void>
   editingResource?: ResourceCard | null
   isSaving?: boolean
+  categorySuggestions?: string[]
 }
-
-const EDITABLE_CATEGORIES = CATEGORIES.filter((c) => c !== "All")
 
 export function AddResourceModal({
   open,
@@ -39,12 +38,26 @@ export function AddResourceModal({
   onSave,
   editingResource,
   isSaving = false,
+  categorySuggestions = [],
 }: AddResourceModalProps) {
   const [category, setCategory] = useState("")
   const [customCategory, setCustomCategory] = useState("")
   const [links, setLinks] = useState<LinkInput[]>([
     { url: "", label: "", note: "" },
   ])
+
+  const categoryOptions = useMemo(() => {
+    const unique = new Set<string>()
+
+    for (const category of [...categorySuggestions, ...DEFAULT_CATEGORY_SUGGESTIONS]) {
+      const normalized = category.trim()
+      if (normalized.length > 0) {
+        unique.add(normalized)
+      }
+    }
+
+    return [...unique]
+  }, [categorySuggestions])
 
   const resetForm = useCallback(() => {
     setCategory("")
@@ -58,11 +71,7 @@ export function AddResourceModal({
       return
     }
 
-    if (
-      EDITABLE_CATEGORIES.includes(
-        editingResource.category as (typeof EDITABLE_CATEGORIES)[number]
-      )
-    ) {
+    if (categoryOptions.includes(editingResource.category)) {
       setCategory(editingResource.category)
       setCustomCategory("")
     } else {
@@ -77,7 +86,7 @@ export function AddResourceModal({
         note: link.note ?? "",
       }))
     )
-  }, [editingResource, resetForm])
+  }, [categoryOptions, editingResource, resetForm])
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (nextOpen) {
@@ -152,7 +161,7 @@ export function AddResourceModal({
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               <option value="">Select a category...</option>
-              {EDITABLE_CATEGORIES.map((cat) => (
+              {categoryOptions.map((cat) => (
                 <option key={cat} value={cat}>
                   {cat}
                 </option>

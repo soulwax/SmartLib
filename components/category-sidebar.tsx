@@ -1,8 +1,6 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import type { Category } from "@/lib/resources"
-import { CATEGORIES } from "@/lib/resources"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Globe, Code2, Cpu, Gamepad2, Sigma, Network, Server, Database, ShieldCheck, Layers } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
@@ -25,24 +23,45 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
 }
 
 interface CategorySidebarProps {
-  activeCategory: Category | "All"
-  onCategoryChange: (cat: Category | "All") => void
+  categories: string[]
+  activeCategory: string | "All"
+  onCategoryChange: (cat: string | "All") => void
   resourceCounts: Record<string, number>
 }
 
+function resolveCategoryIcon(category: string): LucideIcon {
+  const direct = CATEGORY_ICONS[category]
+  if (direct) {
+    return direct
+  }
+
+  const segments = category.split("/").map((segment) => segment.trim())
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segmentIcon = CATEGORY_ICONS[segments[index]]
+    if (segmentIcon) {
+      return segmentIcon
+    }
+  }
+
+  return Globe
+}
+
 export function CategorySidebar({
+  categories,
   activeCategory,
   onCategoryChange,
   resourceCounts,
 }: CategorySidebarProps) {
+  const categoryItems = ["All", ...categories.filter((category) => category !== "All")]
+
   return (
     <ScrollArea className="h-full">
       <div className="flex flex-col gap-1 p-4">
         <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Categories
         </p>
-        {CATEGORIES.map((cat) => {
-          const Icon = CATEGORY_ICONS[cat] ?? Globe
+        {categoryItems.map((cat) => {
+          const Icon = resolveCategoryIcon(cat)
           const isActive = activeCategory === cat
           const count = cat === "All"
             ? Object.values(resourceCounts).reduce((a, b) => a + b, 0)

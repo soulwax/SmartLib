@@ -3,7 +3,8 @@
 import type { ResourceCard } from "@/lib/seed-data"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ExternalLink, Pencil, Trash2 } from "lucide-react"
+import { ExternalLink, Pencil, Trash2, Copy, Check } from "lucide-react"
+import { useState, useCallback } from "react"
 
 interface ResourceCardProps {
   resource: ResourceCard
@@ -12,6 +13,14 @@ interface ResourceCardProps {
 }
 
 export function ResourceCardItem({ resource, onDelete, onEdit }: ResourceCardProps) {
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  const handleCopy = useCallback((linkId: string, url: string) => {
+    navigator.clipboard.writeText(url)
+    setCopiedId(linkId)
+    setTimeout(() => setCopiedId(null), 1500)
+  }, [])
+
   return (
     <div className="group flex flex-col rounded-lg border border-border bg-card p-5 shadow-sm transition-all hover:border-primary/30 hover:shadow-md hover:shadow-primary/5">
       <div className="mb-3 flex items-center justify-between">

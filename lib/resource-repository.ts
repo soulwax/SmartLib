@@ -1,6 +1,6 @@
 import "server-only"
 
-import { asc, desc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, isNotNull, isNull, sql } from "drizzle-orm"
 
 import { resourceCards, resourceLinks } from "@/lib/db-schema"
 import { ensureSchema, getDb } from "@/lib/db"
@@ -16,10 +16,23 @@ export class ResourceNotFoundError extends Error {
 interface ResourceJoinRow {
   resourceId: string
   resourceCategory: string
+  resourceDeletedAt: Date | string | null
   linkId: string | null
   linkUrl: string | null
   linkLabel: string | null
   linkNote: string | null
+}
+
+function normalizeTimestamp(value: Date | string | null): string | null {
+  if (!value) {
+    return null
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  return value
 }
 
 function mapRowsToResources(rows: ResourceJoinRow[]): ResourceCard[] {
@@ -33,6 +46,7 @@ function mapRowsToResources(rows: ResourceJoinRow[]): ResourceCard[] {
       resource = {
         id: row.resourceId,
         category: row.resourceCategory,
+        deletedAt: normalizeTimestamp(row.resourceDeletedAt),
         links: [],
       }
       resourcesById.set(row.resourceId, resource)
@@ -52,13 +66,21 @@ function mapRowsToResources(rows: ResourceJoinRow[]): ResourceCard[] {
   return orderedResources
 }
 
-async function findResourceById(id: string): Promise<ResourceCard | null> {
+async function findResourceById(
+  id: string,
+  options: { includeDeleted: boolean }
+): Promise<ResourceCard | null> {
   const db = getDb()
+
+  const whereCondition = options.includeDeleted
+    ? eq(resourceCards.id, id)
+    : and(eq(resourceCards.id, id), isNull(resourceCards.deletedAt))
 
   const rows = await db
     .select({
       resourceId: resourceCards.id,
       resourceCategory: resourceCards.category,
+      resourceDeletedAt: resourceCards.deletedAt,
       linkId: resourceLinks.id,
       linkUrl: resourceLinks.url,
       linkLabel: resourceLinks.label,
@@ -66,11 +88,20 @@ async function findResourceById(id: string): Promise<ResourceCard | null> {
     })
     .from(resourceCards)
     .leftJoin(resourceLinks, eq(resourceCards.id, resourceLinks.resourceId))
-    .where(eq(resourceCards.id, id))
+    .where(whereCondition)
     .orderBy(asc(resourceLinks.position))
 
   const resources = mapRowsToResources(rows)
   return resources[0] ?? null
+}
+
+export async function hasAnyResources(): Promise<boolean> {
+  await ensureSchema()
+  const db = getDb()
+
+  const rows = await db.select({ id: resourceCards.id }).from(resourceCards).limit(1)
+
+  return rows.length > 0
 }
 
 export async function listResources(): Promise<ResourceCard[]> {
@@ -81,6 +112,29 @@ export async function listResources(): Promise<ResourceCard[]> {
     .select({
       resourceId: resourceCards.id,
       resourceCategory: resourceCards.category,
+      resourceDeletedAt: resourceCards.deletedAt,
+      linkId: resourceLinks.id,
+      linkUrl: resourceLinks.url,
+      linkLabel: resourceLinks.label,
+      linkNote: resourceLinks.note,
+    })
+    .from(resourceCards)
+    .leftJoin(resourceLinks, eq(resourceCards.id, resourceLinks.resourceId))
+    .where(isNull(resourceCards.deletedAt))
+    .orderBy(desc(resourceCards.createdAt), asc(resourceLinks.position))
+
+  return mapRowsToResources(rows)
+}
+
+export async function listResourcesIncludingDeleted(): Promise<ResourceCard[]> {
+  await ensureSchema()
+  const db = getDb()
+
+  const rows = await db
+    .select({
+      resourceId: resourceCards.id,
+      resourceCategory: resourceCards.category,
+      resourceDeletedAt: resourceCards.deletedAt,
       linkId: resourceLinks.id,
       linkUrl: resourceLinks.url,
       linkLabel: resourceLinks.label,
@@ -123,7 +177,7 @@ export async function createResource(input: ResourceInput): Promise<ResourceCard
     )
   }
 
-  const resource = await findResourceById(createdCard.id)
+  const resource = await findResourceById(createdCard.id, { includeDeleted: false })
   if (!resource) {
     throw new Error("Failed to read created resource card.")
   }
@@ -144,7 +198,7 @@ export async function updateResource(
       category: input.category,
       updatedAt: sql`NOW()`,
     })
-    .where(eq(resourceCards.id, id))
+    .where(and(eq(resourceCards.id, id), isNull(resourceCards.deletedAt)))
     .returning({
       id: resourceCards.id,
     })
@@ -167,7 +221,7 @@ export async function updateResource(
     )
   }
 
-  const resource = await findResourceById(id)
+  const resource = await findResourceById(id, { includeDeleted: false })
   if (!resource) {
     throw new ResourceNotFoundError(id)
   }
@@ -180,11 +234,40 @@ export async function deleteResource(id: string): Promise<void> {
   const db = getDb()
 
   const rows = await db
-    .delete(resourceCards)
-    .where(eq(resourceCards.id, id))
+    .update(resourceCards)
+    .set({
+      deletedAt: sql`NOW()`,
+      updatedAt: sql`NOW()`,
+    })
+    .where(and(eq(resourceCards.id, id), isNull(resourceCards.deletedAt)))
     .returning({ id: resourceCards.id })
 
   if (rows.length === 0) {
     throw new ResourceNotFoundError(id)
   }
+}
+
+export async function restoreResource(id: string): Promise<ResourceCard> {
+  await ensureSchema()
+  const db = getDb()
+
+  const rows = await db
+    .update(resourceCards)
+    .set({
+      deletedAt: null,
+      updatedAt: sql`NOW()`,
+    })
+    .where(and(eq(resourceCards.id, id), isNotNull(resourceCards.deletedAt)))
+    .returning({ id: resourceCards.id })
+
+  if (rows.length === 0) {
+    throw new ResourceNotFoundError(id)
+  }
+
+  const resource = await findResourceById(id, { includeDeleted: false })
+  if (!resource) {
+    throw new ResourceNotFoundError(id)
+  }
+
+  return resource
 }

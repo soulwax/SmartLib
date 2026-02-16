@@ -15,6 +15,13 @@
       "when": 1771257029642,
       "tag": "0001_eager_wolf_cub",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771262421112,
+      "tag": "0002_supreme_manta",
+      "breakpoints": true
     }
   ]
 }

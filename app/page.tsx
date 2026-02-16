@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { signIn, signOut, useSession } from "next-auth/react"
 
 import type { ResourceCard, ResourceInput } from "@/lib/resources"
@@ -34,6 +35,7 @@ import {
   Menu,
   Plus,
   Search,
+  Settings2,
   ShieldPlus,
   UserPlus,
 } from "lucide-react"
@@ -405,7 +407,7 @@ export default function Page() {
         const payload = await readJson<ApiErrorResponse>(response)
 
         if (!response.ok) {
-          throw new Error(payload?.error ?? "Failed to delete resource.")
+          throw new Error(payload?.error ?? "Failed to archive resource.")
         }
 
         if (payload?.mode) {
@@ -413,15 +415,15 @@ export default function Page() {
         }
 
         setResources((prev) => prev.filter((resource) => resource.id !== resourceId))
-        toast.success("Resource removed", {
-          description: "The card has been deleted from your library.",
+        toast.success("Resource archived", {
+          description: "Hidden from library. You can restore it in Admin Panel.",
         })
       } catch (error) {
-        toast.error("Delete failed", {
+        toast.error("Archive failed", {
           description:
             error instanceof Error
               ? error.message
-              : "Could not delete this resource.",
+              : "Could not archive this resource.",
         })
       } finally {
         setDeletingResourceId(null)
@@ -501,6 +503,14 @@ export default function Page() {
                 >
                   <ShieldPlus className="h-4 w-4" />
                   <span className="ml-2 hidden sm:inline">Promote Admin</span>
+                </Button>
+              ) : null}
+              {isAdmin ? (
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/admin">
+                    <Settings2 className="h-4 w-4" />
+                    <span className="ml-2 hidden sm:inline">Admin Panel</span>
+                  </Link>
                 </Button>
               ) : null}
               <Button variant="outline" size="sm" onClick={() => void handleSignOut()}>

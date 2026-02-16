@@ -1,0 +1,1 @@
+ALTER TABLE "resource_cards" ADD COLUMN "deleted_at" timestamp with time zone;

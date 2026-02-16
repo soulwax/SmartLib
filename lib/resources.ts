@@ -9,6 +9,7 @@ export interface ResourceCard {
   id: string
   category: string
   links: ResourceLink[]
+  deletedAt?: string | null
 }
 
 export interface ResourceLinkInput {

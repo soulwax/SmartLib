@@ -6,13 +6,19 @@ import { loadLibraryResourcesFromFile } from "@/lib/library-parser"
 import {
   createMockResource,
   deleteMockResource,
+  hasAnyMockResources,
+  listMockResourcesIncludingDeleted,
   listMockResources,
+  restoreMockResource,
   updateMockResource,
 } from "@/lib/mock-resource-store"
 import {
   createResource as createDbResource,
   deleteResource as deleteDbResource,
+  hasAnyResources as hasAnyDbResources,
+  listResourcesIncludingDeleted as listDbResourcesIncludingDeleted,
   listResources as listDbResources,
+  restoreResource as restoreDbResource,
   updateResource as updateDbResource,
 } from "@/lib/resource-repository"
 import type { ResourceCard, ResourceInput } from "@/lib/resources"
@@ -45,8 +51,8 @@ async function ensureDatabaseBootstrapped() {
   databaseBootstrap = (async () => {
     await ensureSuperAdminSeeded()
 
-    const existingResources = await listDbResources()
-    if (existingResources.length > 0) {
+    const hasExistingResources = await hasAnyDbResources()
+    if (hasExistingResources) {
       return
     }
 
@@ -107,6 +113,32 @@ export async function createResourceService(
   }
 }
 
+export async function listResourcesIncludingDeletedService(): Promise<{
+  mode: ResourceDataMode
+  resources: ResourceCard[]
+}> {
+  const mode = currentMode()
+
+  if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
+    return {
+      mode,
+      resources: await listDbResourcesIncludingDeleted(),
+    }
+  }
+
+  const hasResources = await hasAnyMockResources()
+  if (!hasResources) {
+    return { mode, resources: [] }
+  }
+
+  return {
+    mode,
+    resources: await listMockResourcesIncludingDeleted(),
+  }
+}
+
 export async function updateResourceService(
   id: string,
   input: ResourceInput
@@ -138,4 +170,22 @@ export async function deleteResourceService(
 
   await deleteMockResource(id)
   return { mode }
+}
+
+export async function restoreResourceService(
+  id: string
+): Promise<{ mode: ResourceDataMode; resource: ResourceCard }> {
+  const mode = currentMode()
+
+  if (mode === "database") {
+    return {
+      mode,
+      resource: await restoreDbResource(id),
+    }
+  }
+
+  return {
+    mode,
+    resource: await restoreMockResource(id),
+  }
 }

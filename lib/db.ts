@@ -53,8 +53,14 @@ export async function ensureSchema() {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         category TEXT NOT NULL CHECK (char_length(category) <= 80),
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_at TIMESTAMPTZ
       )
+    `
+
+    await sql`
+      ALTER TABLE resource_cards
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ
     `
 
     await sql`

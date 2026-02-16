@@ -36,3 +36,19 @@ export function getDatabaseEnv(): {
     DATABASE_URL_UNPOOLED: process.env.DATABASE_URL_UNPOOLED!.trim(),
   }
 }
+
+export function getOptionalSuperAdminEnv():
+  | { username: string; password: string }
+  | null {
+  const username = process.env.SUPERADMIN_USERNAME?.trim()
+  const password = process.env.SUPERADMIN_PASSWORD?.trim()
+
+  if (!username || !password) {
+    return null
+  }
+
+  return {
+    username,
+    password,
+  }
+}

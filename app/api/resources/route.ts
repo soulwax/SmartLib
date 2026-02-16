@@ -62,6 +62,9 @@ export async function POST(request: Request) {
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
     }
+    if (!session.user.isAdmin) {
+      return errorResponse("Admin access required.", 403)
+    }
 
     const payload = await readRequestJson(request)
     const input = parseResourceInput(payload)

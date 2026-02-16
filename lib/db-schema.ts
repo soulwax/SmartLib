@@ -1,5 +1,6 @@
 import { relations, sql } from "drizzle-orm"
 import {
+  boolean,
   check,
   index,
   integer,
@@ -65,7 +66,9 @@ export const appUsers = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     email: text("email").notNull(),
-    passwordHash: text("password_hash").notNull(),
+    passwordHash: text("password_hash"),
+    isAdmin: boolean("is_admin").default(false).notNull(),
+    isFirstAdmin: boolean("is_first_admin").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -73,6 +76,9 @@ export const appUsers = pgTable(
   (table) => [
     check("app_users_email_length_check", sql`char_length(${table.email}) <= 320`),
     uniqueIndex("app_users_email_lower_idx").on(sql`lower(${table.email})`),
+    uniqueIndex("app_users_single_first_admin_idx")
+      .on(table.isFirstAdmin)
+      .where(sql`${table.isFirstAdmin} = true`),
   ]
 )
 

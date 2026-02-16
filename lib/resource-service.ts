@@ -1,5 +1,6 @@
 import "server-only"
 
+import { ensureSuperAdminSeeded } from "@/lib/auth-service"
 import { hasDatabaseEnv } from "@/lib/env"
 import { loadLibraryResourcesFromFile } from "@/lib/library-parser"
 import {
@@ -42,6 +43,8 @@ async function ensureDatabaseBootstrapped() {
   }
 
   databaseBootstrap = (async () => {
+    await ensureSuperAdminSeeded()
+
     const existingResources = await listDbResources()
     if (existingResources.length > 0) {
       return

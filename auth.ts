@@ -3,11 +3,17 @@ import CredentialsProvider from "next-auth/providers/credentials"
 import GitHubProvider from "next-auth/providers/github"
 import { z } from "zod"
 
-import { findAuthUserByEmail } from "@/lib/auth-service"
+import {
+  ensureAuthUserForSignIn,
+  ensureSuperAdminSeeded,
+  findAuthUserByEmail,
+  findAuthUserById,
+  isConfiguredSuperAdminCredentials,
+} from "@/lib/auth-service"
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, verifyPassword } from "@/lib/password"
 
 const credentialsSchema = z.object({
-  email: z.string().trim().email().max(320),
+  email: z.string().trim().min(1).max(320),
   password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
 })
 
@@ -39,8 +45,8 @@ export const authOptions: NextAuthOptions = {
       name: "Email + Password",
       credentials: {
         email: {
-          label: "Email",
-          type: "email",
+          label: "Email or username",
+          type: "text",
         },
         password: {
           label: "Password",
@@ -53,11 +59,24 @@ export const authOptions: NextAuthOptions = {
           return null
         }
 
-        const email = parsed.data.email.trim().toLowerCase()
+        await ensureSuperAdminSeeded()
+
+        const identifier = parsed.data.email.trim().toLowerCase()
         const password = parsed.data.password
 
-        const { user } = await findAuthUserByEmail(email)
-        if (!user) {
+        if (isConfiguredSuperAdminCredentials(identifier, password)) {
+          const { user } = await ensureAuthUserForSignIn(identifier)
+
+          return {
+            id: user.id,
+            email: user.email,
+            isAdmin: user.isAdmin,
+            isFirstAdmin: user.isFirstAdmin,
+          }
+        }
+
+        const { user } = await findAuthUserByEmail(identifier)
+        if (!user?.passwordHash) {
           return null
         }
 
@@ -66,19 +85,58 @@ export const authOptions: NextAuthOptions = {
           return null
         }
 
+        const { user: syncedUser } = await ensureAuthUserForSignIn(identifier)
+
         return {
-          id: user.id,
-          email: user.email,
+          id: syncedUser.id,
+          email: syncedUser.email,
+          isAdmin: syncedUser.isAdmin,
+          isFirstAdmin: syncedUser.isFirstAdmin,
         }
       },
     }),
   ],
   callbacks: {
+    async signIn({ user }) {
+      const identifier = user.email?.trim().toLowerCase()
+      if (!identifier) {
+        return false
+      }
+
+      const { user: syncedUser } = await ensureAuthUserForSignIn(identifier)
+      user.id = syncedUser.id
+      user.email = syncedUser.email
+      user.isAdmin = syncedUser.isAdmin
+      user.isFirstAdmin = syncedUser.isFirstAdmin
+
+      return true
+    },
     async jwt({ token, user }) {
       if (user?.id) {
         token.userId = user.id
-      } else if (!token.userId && typeof token.sub === "string") {
+      }
+
+      if (typeof user?.isAdmin === "boolean") {
+        token.isAdmin = user.isAdmin
+      }
+
+      if (typeof user?.isFirstAdmin === "boolean") {
+        token.isFirstAdmin = user.isFirstAdmin
+      }
+
+      if (!token.userId && typeof token.sub === "string") {
         token.userId = token.sub
+      }
+
+      if (typeof token.userId === "string") {
+        const { user: authUser } = await findAuthUserById(token.userId)
+
+        if (authUser) {
+          token.userId = authUser.id
+          token.isAdmin = authUser.isAdmin
+          token.isFirstAdmin = authUser.isFirstAdmin
+          token.email = authUser.email
+        }
       }
 
       return token
@@ -90,6 +148,9 @@ export const authOptions: NextAuthOptions = {
         } else if (typeof token.sub === "string") {
           session.user.id = token.sub
         }
+
+        session.user.isAdmin = token.isAdmin === true
+        session.user.isFirstAdmin = token.isFirstAdmin === true
       }
 
       return session

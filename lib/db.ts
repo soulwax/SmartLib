@@ -83,14 +83,37 @@ export async function ensureSchema() {
       CREATE TABLE IF NOT EXISTS app_users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email TEXT NOT NULL CHECK (char_length(email) <= 320),
-        password_hash TEXT NOT NULL,
+        password_hash TEXT,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        is_first_admin BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `
 
     await sql`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE
+    `
+
+    await sql`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS is_first_admin BOOLEAN NOT NULL DEFAULT FALSE
+    `
+
+    await sql`
+      ALTER TABLE app_users
+      ALTER COLUMN password_hash DROP NOT NULL
+    `
+
+    await sql`
       CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_lower_idx
       ON app_users ((lower(email)))
+    `
+
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS app_users_single_first_admin_idx
+      ON app_users (is_first_admin)
+      WHERE is_first_admin = true
     `
   })()
 

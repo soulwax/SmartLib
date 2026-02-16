@@ -62,6 +62,9 @@ export async function PUT(request: Request, context: RouteContext) {
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
     }
+    if (!session.user.isAdmin) {
+      return errorResponse("Admin access required.", 403)
+    }
 
     const resourceId = await parseResourceId(context)
     const payload = await readRequestJson(request)
@@ -79,6 +82,9 @@ export async function DELETE(_request: Request, context: RouteContext) {
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
+    }
+    if (!session.user.isAdmin) {
+      return errorResponse("Admin access required.", 403)
     }
 
     const resourceId = await parseResourceId(context)

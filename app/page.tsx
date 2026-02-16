@@ -34,6 +34,7 @@ import {
   Menu,
   Plus,
   Search,
+  ShieldPlus,
   UserPlus,
 } from "lucide-react"
 import { Toaster, toast } from "sonner"
@@ -51,6 +52,15 @@ interface ListResourcesResponse extends ApiErrorResponse {
 interface ResourceResponse extends ApiErrorResponse {
   mode?: "database" | "mock"
   resource?: ResourceCard
+}
+
+interface PromoteAdminResponse extends ApiErrorResponse {
+  user?: {
+    id: string
+    email: string
+    isAdmin: boolean
+    isFirstAdmin: boolean
+  }
 }
 
 type AuthMode = "login" | "register"
@@ -85,9 +95,16 @@ export default function Page() {
   const [authEmail, setAuthEmail] = useState("")
   const [authPassword, setAuthPassword] = useState("")
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
+  const [promoteDialogOpen, setPromoteDialogOpen] = useState(false)
+  const [promoteIdentifier, setPromoteIdentifier] = useState("")
+  const [isPromotingAdmin, setIsPromotingAdmin] = useState(false)
 
   const isAuthenticated = Boolean(session?.user?.id)
+  const isAdmin = Boolean(session?.user?.isAdmin)
+  const isFirstAdmin = Boolean(session?.user?.isFirstAdmin)
+  const canManageResources = isAdmin
   const canSubmitAuth = authEmail.trim().length > 0 && authPassword.length > 0
+  const canSubmitPromote = promoteIdentifier.trim().length > 0 && !isPromotingAdmin
 
   const resourceCounts = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -210,7 +227,7 @@ export default function Page() {
       const password = authPassword
 
       if (!email || !password) {
-        throw new Error("Email and password are required.")
+        throw new Error("Username/email and password are required.")
       }
 
       if (authMode === "register") {
@@ -235,7 +252,7 @@ export default function Page() {
       })
 
       if (signInResult?.error) {
-        throw new Error("Invalid email or password.")
+        throw new Error("Invalid username/email or password.")
       }
 
       handleAuthDialogOpenChange(false)
@@ -267,11 +284,49 @@ export default function Page() {
     void signIn("github", { callbackUrl: "/" })
   }, [])
 
+  const handlePromoteAdmin = useCallback(async () => {
+    if (!isFirstAdmin || !canSubmitPromote) {
+      return
+    }
+
+    setIsPromotingAdmin(true)
+
+    try {
+      const response = await fetch("/api/auth/admins", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identifier: promoteIdentifier.trim(),
+        }),
+      })
+      const payload = await readJson<PromoteAdminResponse>(response)
+
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error ?? "Failed to promote admin.")
+      }
+
+      setPromoteIdentifier("")
+      setPromoteDialogOpen(false)
+      toast.success("Admin promoted", {
+        description: `${payload.user.email} can now manage resources.`,
+      })
+    } catch (error) {
+      toast.error("Promotion failed", {
+        description:
+          error instanceof Error ? error.message : "Could not promote this user.",
+      })
+    } finally {
+      setIsPromotingAdmin(false)
+    }
+  }, [canSubmitPromote, isFirstAdmin, promoteIdentifier])
+
   const handleSave = useCallback(
     async (input: ResourceInput) => {
-      if (!isAuthenticated) {
-        toast.error("Authentication required", {
-          description: "Sign in to add or edit resource cards.",
+      if (!canManageResources) {
+        toast.error("Admin access required", {
+          description: "Only admins can add or edit resource cards.",
         })
         return
       }
@@ -329,14 +384,14 @@ export default function Page() {
         setIsSaving(false)
       }
     },
-    [editingResource, isAuthenticated]
+    [canManageResources, editingResource]
   )
 
   const handleDelete = useCallback(
     async (resourceId: string) => {
-      if (!isAuthenticated) {
-        toast.error("Authentication required", {
-          description: "Sign in to delete resource cards.",
+      if (!canManageResources) {
+        toast.error("Admin access required", {
+          description: "Only admins can delete resource cards.",
         })
         return
       }
@@ -372,7 +427,7 @@ export default function Page() {
         setDeletingResourceId(null)
       }
     },
-    [isAuthenticated]
+    [canManageResources]
   )
 
   const handleEdit = useCallback((resource: ResourceCard) => {
@@ -435,22 +490,37 @@ export default function Page() {
               <span className="hidden max-w-48 truncate text-xs text-muted-foreground md:inline">
                 {session?.user?.email}
               </span>
+              <span className="hidden rounded-md bg-secondary px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-secondary-foreground sm:inline">
+                {isFirstAdmin ? "FirstAdmin" : isAdmin ? "Admin" : "Viewer"}
+              </span>
+              {isFirstAdmin ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPromoteDialogOpen(true)}
+                >
+                  <ShieldPlus className="h-4 w-4" />
+                  <span className="ml-2 hidden sm:inline">Promote Admin</span>
+                </Button>
+              ) : null}
               <Button variant="outline" size="sm" onClick={() => void handleSignOut()}>
                 <LogOut className="h-4 w-4" />
                 <span className="ml-2 hidden sm:inline">Sign out</span>
               </Button>
-              <Button
-                onClick={() => {
-                  setEditingResource(null)
-                  setModalOpen(true)
-                }}
-                className="gap-2"
-                size="sm"
-                disabled={isLoading || Boolean(loadError)}
-              >
-                <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">Add Resource</span>
-              </Button>
+              {canManageResources ? (
+                <Button
+                  onClick={() => {
+                    setEditingResource(null)
+                    setModalOpen(true)
+                  }}
+                  className="gap-2"
+                  size="sm"
+                  disabled={isLoading || Boolean(loadError)}
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="hidden sm:inline">Add Resource</span>
+                </Button>
+              ) : null}
             </>
           ) : (
             <>
@@ -528,12 +598,14 @@ export default function Page() {
                 <p className="mt-1 text-sm text-muted-foreground">
                   {searchQuery
                     ? `Nothing matches "${searchQuery}". Try a different search.`
-                    : isAuthenticated
+                    : canManageResources
                       ? "Add your first resource to get started!"
-                      : "Sign in to add, edit, or delete resource cards."}
+                      : isAuthenticated
+                        ? "You are signed in as read-only. Ask FirstAdmin for admin access."
+                        : "Sign in to request admin access and manage resources."}
                 </p>
               </div>
-              {!searchQuery && isAuthenticated ? (
+              {!searchQuery && canManageResources ? (
                 <Button
                   onClick={() => {
                     setEditingResource(null)
@@ -548,7 +620,7 @@ export default function Page() {
               {!searchQuery && !isAuthenticated ? (
                 <Button onClick={() => openAuthDialog("login")} className="gap-2">
                   <LogIn className="h-4 w-4" />
-                  Sign in to manage resources
+                  Sign in
                 </Button>
               ) : null}
             </div>
@@ -561,7 +633,7 @@ export default function Page() {
                   onDelete={handleDelete}
                   onEdit={handleEdit}
                   isDeleting={deletingResourceId === resource.id}
-                  canManage={isAuthenticated}
+                  canManage={canManageResources}
                 />
               ))}
             </div>
@@ -622,15 +694,21 @@ export default function Page() {
             }}
           >
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="auth-email">Email</Label>
+              <Label htmlFor="auth-email">
+                {authMode === "register" ? "Email" : "Email or username"}
+              </Label>
               <Input
                 id="auth-email"
-                type="email"
-                autoComplete="email"
+                type={authMode === "register" ? "email" : "text"}
+                autoComplete={authMode === "register" ? "email" : "username"}
                 value={authEmail}
                 onChange={(event) => setAuthEmail(event.target.value)}
                 disabled={isAuthSubmitting}
-                placeholder="you@example.com"
+                placeholder={
+                  authMode === "register"
+                    ? "you@example.com"
+                    : "you@example.com or soulwax"
+                }
               />
             </div>
 
@@ -655,6 +733,48 @@ export default function Page() {
                   : "Sign in"}
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={promoteDialogOpen}
+        onOpenChange={(open) => {
+          setPromoteDialogOpen(open)
+          if (!open) {
+            setPromoteIdentifier("")
+            setIsPromotingAdmin(false)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Promote Admin</DialogTitle>
+            <DialogDescription>
+              FirstAdmin can grant admin access to existing users.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="promote-identifier">Email or username</Label>
+            <Input
+              id="promote-identifier"
+              value={promoteIdentifier}
+              onChange={(event) => setPromoteIdentifier(event.target.value)}
+              placeholder="user@example.com"
+              disabled={isPromotingAdmin}
+            />
+            <p className="text-xs text-muted-foreground">
+              User must have signed in at least once.
+            </p>
+          </div>
+
+          <Button
+            type="button"
+            onClick={() => void handlePromoteAdmin()}
+            disabled={!canSubmitPromote || !isFirstAdmin}
+          >
+            {isPromotingAdmin ? "Promoting..." : "Promote to Admin"}
+          </Button>
         </DialogContent>
       </Dialog>
 

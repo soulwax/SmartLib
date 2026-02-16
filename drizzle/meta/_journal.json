@@ -8,6 +8,13 @@
       "when": 1771250770978,
       "tag": "0000_powerful_hairball",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1771257029642,
+      "tag": "0001_eager_wolf_cub",
+      "breakpoints": true
     }
   ]
 }

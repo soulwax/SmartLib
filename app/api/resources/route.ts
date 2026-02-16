@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { auth } from "@/auth"
 import { ResourceNotFoundError } from "@/lib/resource-repository"
 import {
   createResourceService,
@@ -57,6 +58,11 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const session = await auth()
+    if (!session?.user?.id) {
+      return errorResponse("Authentication required.", 401)
+    }
+
     const payload = await readRequestJson(request)
     const input = parseResourceInput(payload)
     const { mode, resource } = await createResourceService(input)

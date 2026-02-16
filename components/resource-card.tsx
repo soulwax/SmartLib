@@ -10,6 +10,7 @@ interface ResourceCardProps {
   onDelete: (id: string) => void
   onEdit: (resource: ResourceCard) => void
   isDeleting?: boolean
+  canManage?: boolean
 }
 
 export function ResourceCardItem({
@@ -17,6 +18,7 @@ export function ResourceCardItem({
   onDelete,
   onEdit,
   isDeleting = false,
+  canManage = false,
 }: ResourceCardProps) {
   return (
     <div className="group flex flex-col rounded-lg border border-border bg-card p-5 shadow-sm transition-all hover:border-primary/30 hover:shadow-md hover:shadow-primary/5">
@@ -24,28 +26,30 @@ export function ResourceCardItem({
         <Badge variant="secondary" className="font-medium">
           {resource.category}
         </Badge>
-        <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            onClick={() => onEdit(resource)}
-            aria-label={`Edit ${resource.category} resource card`}
-            disabled={isDeleting}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-            onClick={() => onDelete(resource.id)}
-            aria-label={`Delete ${resource.category} resource card`}
-            disabled={isDeleting}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+        {canManage ? (
+          <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              onClick={() => onEdit(resource)}
+              aria-label={`Edit ${resource.category} resource card`}
+              disabled={isDeleting}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+              onClick={() => onDelete(resource.id)}
+              aria-label={`Delete ${resource.category} resource card`}
+              disabled={isDeleting}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <ul className="flex flex-col gap-2.5" role="list">

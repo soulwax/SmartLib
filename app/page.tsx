@@ -1,13 +1,22 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { signIn, signOut, useSession } from "next-auth/react"
 
 import type { ResourceCard, ResourceInput } from "@/lib/resources"
 import { AddResourceModal } from "@/components/add-resource-modal"
 import { CategorySidebar } from "@/components/category-sidebar"
 import { ResourceCardItem } from "@/components/resource-card"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Sheet,
   SheetContent,
@@ -15,7 +24,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { BookOpen, FolderOpen, Menu, Plus, Search } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { BookOpen, FolderOpen, LogIn, LogOut, Menu, Plus, Search, UserPlus } from "lucide-react"
 import { Toaster, toast } from "sonner"
 
 interface ApiErrorResponse {
@@ -33,6 +43,8 @@ interface ResourceResponse extends ApiErrorResponse {
   resource?: ResourceCard
 }
 
+type AuthMode = "login" | "register"
+
 async function readJson<T>(response: Response): Promise<T | null> {
   try {
     return (await response.json()) as T
@@ -42,6 +54,7 @@ async function readJson<T>(response: Response): Promise<T | null> {
 }
 
 export default function Page() {
+  const { data: session, status: sessionStatus } = useSession()
   const [resources, setResources] = useState<ResourceCard[]>([])
   const [activeCategory, setActiveCategory] = useState<string | "All">("All")
   const [searchQuery, setSearchQuery] = useState("")
@@ -57,6 +70,14 @@ export default function Page() {
   )
   const [loadError, setLoadError] = useState<string | null>(null)
   const [dataMode, setDataMode] = useState<"database" | "mock">("mock")
+  const [authDialogOpen, setAuthDialogOpen] = useState(false)
+  const [authMode, setAuthMode] = useState<AuthMode>("login")
+  const [authEmail, setAuthEmail] = useState("")
+  const [authPassword, setAuthPassword] = useState("")
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
+
+  const isAuthenticated = Boolean(session?.user?.id)
+  const canSubmitAuth = authEmail.trim().length > 0 && authPassword.length > 0
 
   const resourceCounts = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -146,8 +167,101 @@ export default function Page() {
     }
   }, [activeCategory, resourceCounts])
 
+  const resetAuthForm = useCallback(() => {
+    setAuthEmail("")
+    setAuthPassword("")
+    setIsAuthSubmitting(false)
+  }, [])
+
+  const handleAuthDialogOpenChange = useCallback(
+    (open: boolean) => {
+      setAuthDialogOpen(open)
+      if (!open) {
+        resetAuthForm()
+      }
+    },
+    [resetAuthForm]
+  )
+
+  const openAuthDialog = useCallback((mode: AuthMode) => {
+    setAuthMode(mode)
+    setAuthDialogOpen(true)
+  }, [])
+
+  const handleAuthSubmit = useCallback(async () => {
+    if (isAuthSubmitting) {
+      return
+    }
+
+    setIsAuthSubmitting(true)
+
+    try {
+      const email = authEmail.trim().toLowerCase()
+      const password = authPassword
+
+      if (!email || !password) {
+        throw new Error("Email and password are required.")
+      }
+
+      if (authMode === "register") {
+        const registerResponse = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ email, password }),
+        })
+        const registerPayload = await readJson<ApiErrorResponse>(registerResponse)
+
+        if (!registerResponse.ok) {
+          throw new Error(registerPayload?.error ?? "Registration failed.")
+        }
+      }
+
+      const signInResult = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      })
+
+      if (signInResult?.error) {
+        throw new Error("Invalid email or password.")
+      }
+
+      handleAuthDialogOpenChange(false)
+
+      toast.success(authMode === "register" ? "Registration complete" : "Signed in", {
+        description:
+          authMode === "register"
+            ? "Your account has been created and signed in."
+            : "Authenticated actions are now unlocked.",
+      })
+    } catch (error) {
+      toast.error(authMode === "register" ? "Registration failed" : "Sign-in failed", {
+        description:
+          error instanceof Error ? error.message : "Could not authenticate user.",
+      })
+    } finally {
+      setIsAuthSubmitting(false)
+    }
+  }, [authEmail, authMode, authPassword, handleAuthDialogOpenChange, isAuthSubmitting])
+
+  const handleSignOut = useCallback(async () => {
+    await signOut({ redirect: false })
+    toast.success("Signed out", {
+      description: "Resource management actions are now locked.",
+    })
+  }, [])
+
   const handleSave = useCallback(
     async (input: ResourceInput) => {
+      if (!isAuthenticated) {
+        toast.error("Authentication required", {
+          description: "Sign in to add or edit resource cards.",
+        })
+        return
+      }
+
       const isEditing = editingResource !== null
       setIsSaving(true)
 
@@ -201,41 +315,51 @@ export default function Page() {
         setIsSaving(false)
       }
     },
-    [editingResource]
+    [editingResource, isAuthenticated]
   )
 
-  const handleDelete = useCallback(async (resourceId: string) => {
-    setDeletingResourceId(resourceId)
-
-    try {
-      const response = await fetch(`/api/resources/${resourceId}`, {
-        method: "DELETE",
-      })
-      const payload = await readJson<ApiErrorResponse>(response)
-
-      if (!response.ok) {
-        throw new Error(payload?.error ?? "Failed to delete resource.")
+  const handleDelete = useCallback(
+    async (resourceId: string) => {
+      if (!isAuthenticated) {
+        toast.error("Authentication required", {
+          description: "Sign in to delete resource cards.",
+        })
+        return
       }
 
-      if (payload?.mode) {
-        setDataMode(payload.mode)
-      }
+      setDeletingResourceId(resourceId)
 
-      setResources((prev) => prev.filter((resource) => resource.id !== resourceId))
-      toast.success("Resource removed", {
-        description: "The card has been deleted from your library.",
-      })
-    } catch (error) {
-      toast.error("Delete failed", {
-        description:
-          error instanceof Error
-            ? error.message
-            : "Could not delete this resource.",
-      })
-    } finally {
-      setDeletingResourceId(null)
-    }
-  }, [])
+      try {
+        const response = await fetch(`/api/resources/${resourceId}`, {
+          method: "DELETE",
+        })
+        const payload = await readJson<ApiErrorResponse>(response)
+
+        if (!response.ok) {
+          throw new Error(payload?.error ?? "Failed to delete resource.")
+        }
+
+        if (payload?.mode) {
+          setDataMode(payload.mode)
+        }
+
+        setResources((prev) => prev.filter((resource) => resource.id !== resourceId))
+        toast.success("Resource removed", {
+          description: "The card has been deleted from your library.",
+        })
+      } catch (error) {
+        toast.error("Delete failed", {
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not delete this resource.",
+        })
+      } finally {
+        setDeletingResourceId(null)
+      }
+    },
+    [isAuthenticated]
+  )
 
   const handleEdit = useCallback((resource: ResourceCard) => {
     setEditingResource(resource)
@@ -251,7 +375,7 @@ export default function Page() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-3 lg:px-6">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-3 lg:px-6">
         <Button
           variant="ghost"
           size="icon"
@@ -277,7 +401,7 @@ export default function Page() {
           </div>
         </div>
 
-        <div className="relative mx-4 max-w-md flex-1">
+        <div className="relative min-w-48 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             type="search"
@@ -289,18 +413,44 @@ export default function Page() {
           />
         </div>
 
-        <Button
-          onClick={() => {
-            setEditingResource(null)
-            setModalOpen(true)
-          }}
-          className="ml-auto gap-2"
-          size="sm"
-          disabled={isLoading || Boolean(loadError)}
-        >
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Add Resource</span>
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {sessionStatus === "loading" ? (
+            <span className="text-xs text-muted-foreground">Checking auth...</span>
+          ) : isAuthenticated ? (
+            <>
+              <span className="hidden max-w-48 truncate text-xs text-muted-foreground md:inline">
+                {session?.user?.email}
+              </span>
+              <Button variant="outline" size="sm" onClick={() => void handleSignOut()}>
+                <LogOut className="h-4 w-4" />
+                <span className="ml-2 hidden sm:inline">Sign out</span>
+              </Button>
+              <Button
+                onClick={() => {
+                  setEditingResource(null)
+                  setModalOpen(true)
+                }}
+                className="gap-2"
+                size="sm"
+                disabled={isLoading || Boolean(loadError)}
+              >
+                <Plus className="h-4 w-4" />
+                <span className="hidden sm:inline">Add Resource</span>
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" onClick={() => openAuthDialog("login")}>
+                <LogIn className="h-4 w-4" />
+                <span className="ml-2 hidden sm:inline">Sign in</span>
+              </Button>
+              <Button size="sm" onClick={() => openAuthDialog("register")}>
+                <UserPlus className="h-4 w-4" />
+                <span className="ml-2 hidden sm:inline">Register</span>
+              </Button>
+            </>
+          )}
+        </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -364,10 +514,12 @@ export default function Page() {
                 <p className="mt-1 text-sm text-muted-foreground">
                   {searchQuery
                     ? `Nothing matches "${searchQuery}". Try a different search.`
-                    : "Add your first resource to get started!"}
+                    : isAuthenticated
+                      ? "Add your first resource to get started!"
+                      : "Sign in to add, edit, or delete resource cards."}
                 </p>
               </div>
-              {!searchQuery && (
+              {!searchQuery && isAuthenticated ? (
                 <Button
                   onClick={() => {
                     setEditingResource(null)
@@ -378,7 +530,13 @@ export default function Page() {
                   <Plus className="h-4 w-4" />
                   Add Resource
                 </Button>
-              )}
+              ) : null}
+              {!searchQuery && !isAuthenticated ? (
+                <Button onClick={() => openAuthDialog("login")} className="gap-2">
+                  <LogIn className="h-4 w-4" />
+                  Sign in to manage resources
+                </Button>
+              ) : null}
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
@@ -389,12 +547,87 @@ export default function Page() {
                   onDelete={handleDelete}
                   onEdit={handleEdit}
                   isDeleting={deletingResourceId === resource.id}
+                  canManage={isAuthenticated}
                 />
               ))}
             </div>
           )}
         </main>
       </div>
+
+      <Dialog open={authDialogOpen} onOpenChange={handleAuthDialogOpenChange}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {authMode === "register" ? "Create account" : "Sign in"}
+            </DialogTitle>
+            <DialogDescription>
+              {authMode === "register"
+                ? "Basic account access to protect add/edit/delete actions."
+                : "Sign in to unlock add, edit, and delete actions."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <Tabs
+            value={authMode}
+            onValueChange={(value) => setAuthMode(value as AuthMode)}
+            className="space-y-3"
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="login">Sign in</TabsTrigger>
+              <TabsTrigger value="register">Register</TabsTrigger>
+            </TabsList>
+            <TabsContent value="login" className="m-0 text-xs text-muted-foreground">
+              Use your existing credentials.
+            </TabsContent>
+            <TabsContent value="register" className="m-0 text-xs text-muted-foreground">
+              Create credentials for protected actions.
+            </TabsContent>
+          </Tabs>
+
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleAuthSubmit()
+            }}
+          >
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="auth-email">Email</Label>
+              <Input
+                id="auth-email"
+                type="email"
+                autoComplete="email"
+                value={authEmail}
+                onChange={(event) => setAuthEmail(event.target.value)}
+                disabled={isAuthSubmitting}
+                placeholder="you@example.com"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="auth-password">Password</Label>
+              <Input
+                id="auth-password"
+                type="password"
+                autoComplete={authMode === "register" ? "new-password" : "current-password"}
+                value={authPassword}
+                onChange={(event) => setAuthPassword(event.target.value)}
+                disabled={isAuthSubmitting}
+                placeholder="At least 8 characters"
+              />
+            </div>
+
+            <Button type="submit" disabled={!canSubmitAuth || isAuthSubmitting}>
+              {isAuthSubmitting
+                ? "Please wait..."
+                : authMode === "register"
+                  ? "Create account"
+                  : "Sign in"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <AddResourceModal
         open={modalOpen}

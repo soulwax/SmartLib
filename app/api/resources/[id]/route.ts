@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { auth } from "@/auth"
 import { ResourceNotFoundError } from "@/lib/resource-repository"
 import {
   deleteResourceService,
@@ -57,6 +58,11 @@ async function parseResourceId(context: RouteContext) {
 
 export async function PUT(request: Request, context: RouteContext) {
   try {
+    const session = await auth()
+    if (!session?.user?.id) {
+      return errorResponse("Authentication required.", 401)
+    }
+
     const resourceId = await parseResourceId(context)
     const payload = await readRequestJson(request)
     const input = parseResourceInput(payload)
@@ -70,6 +76,11 @@ export async function PUT(request: Request, context: RouteContext) {
 
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
+    const session = await auth()
+    if (!session?.user?.id) {
+      return errorResponse("Authentication required.", 401)
+    }
+
     const resourceId = await parseResourceId(context)
     const { mode } = await deleteResourceService(resourceId)
 

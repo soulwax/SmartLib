@@ -11,3 +11,5 @@ tsconfig.tsbuildinfo
 .env.*
 !.env.example
 .DS_Store
+
+certs/

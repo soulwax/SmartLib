@@ -64,6 +64,20 @@ export async function ensureSchema() {
       CREATE INDEX IF NOT EXISTS resource_links_resource_id_position_idx
       ON resource_links (resource_id, position)
     `
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email TEXT NOT NULL CHECK (char_length(email) <= 320),
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `
+
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_lower_idx
+      ON app_users ((lower(email)))
+    `
   })()
 
   await schemaReady

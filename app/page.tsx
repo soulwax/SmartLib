@@ -1026,7 +1026,7 @@ export default function Page() {
           </div>
           <div className="hidden sm:block">
             <h1 className="text-base font-semibold leading-tight text-foreground">
-              DevVault
+              Knowledge
             </h1>
             <p className="text-xs text-muted-foreground">
               {resources.length} cards &middot; {totalLinks} links

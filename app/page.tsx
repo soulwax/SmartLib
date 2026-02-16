@@ -46,6 +46,23 @@ interface ApiErrorResponse {
   mode?: "database" | "mock"
 }
 
+interface AuthRegisterResponse extends ApiErrorResponse {
+  requiresEmailVerification?: boolean
+  verificationEmailMode?: "resend" | "mock"
+  verificationPreviewUrl?: string | null
+  user?: {
+    id: string
+    email: string
+  }
+}
+
+interface ResendVerificationResponse extends ApiErrorResponse {
+  alreadyVerified?: boolean
+  verificationEmailMode?: "resend" | "mock"
+  verificationPreviewUrl?: string | null
+  ok?: boolean
+}
+
 interface ListResourcesResponse extends ApiErrorResponse {
   mode?: "database" | "mock"
   resources?: ResourceCard[]
@@ -97,6 +114,7 @@ export default function Page() {
   const [authEmail, setAuthEmail] = useState("")
   const [authPassword, setAuthPassword] = useState("")
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
+  const [isResendingVerification, setIsResendingVerification] = useState(false)
   const [promoteDialogOpen, setPromoteDialogOpen] = useState(false)
   const [promoteIdentifier, setPromoteIdentifier] = useState("")
   const [isPromotingAdmin, setIsPromotingAdmin] = useState(false)
@@ -196,10 +214,37 @@ export default function Page() {
     }
   }, [activeCategory, resourceCounts])
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    const currentUrl = new URL(window.location.href)
+    const verificationStatus = currentUrl.searchParams.get("emailVerification")
+    if (!verificationStatus) {
+      return
+    }
+
+    if (verificationStatus === "success") {
+      toast.success("Email verified", {
+        description: "You can now sign in with your credentials.",
+      })
+    } else {
+      toast.error("Verification link invalid", {
+        description: "Request a new verification email and try again.",
+      })
+    }
+
+    currentUrl.searchParams.delete("emailVerification")
+    const nextPath = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`
+    window.history.replaceState({}, "", nextPath || "/")
+  }, [])
+
   const resetAuthForm = useCallback(() => {
     setAuthEmail("")
     setAuthPassword("")
     setIsAuthSubmitting(false)
+    setIsResendingVerification(false)
   }, [])
 
   const handleAuthDialogOpenChange = useCallback(
@@ -240,11 +285,32 @@ export default function Page() {
           },
           body: JSON.stringify({ email, password }),
         })
-        const registerPayload = await readJson<ApiErrorResponse>(registerResponse)
+        const registerPayload = await readJson<AuthRegisterResponse>(
+          registerResponse
+        )
 
         if (!registerResponse.ok) {
           throw new Error(registerPayload?.error ?? "Registration failed.")
         }
+
+        handleAuthDialogOpenChange(false)
+        setAuthMode("login")
+        setAuthEmail(email)
+        setAuthPassword("")
+
+        if (registerPayload?.verificationEmailMode === "mock") {
+          toast.success("Registration complete", {
+            description: registerPayload.verificationPreviewUrl
+              ? `Open the verification link: ${registerPayload.verificationPreviewUrl}`
+              : "Verification link available in server logs.",
+          })
+        } else {
+          toast.success("Registration complete", {
+            description: "Check your inbox and confirm your email before sign in.",
+          })
+        }
+
+        return
       }
 
       const signInResult = await signIn("credentials", {
@@ -254,16 +320,19 @@ export default function Page() {
       })
 
       if (signInResult?.error) {
+        if (signInResult.error === "EMAIL_NOT_VERIFIED") {
+          throw new Error(
+            "Email not verified yet. Check your inbox or resend verification."
+          )
+        }
+
         throw new Error("Invalid username/email or password.")
       }
 
       handleAuthDialogOpenChange(false)
 
-      toast.success(authMode === "register" ? "Registration complete" : "Signed in", {
-        description:
-          authMode === "register"
-            ? "Your account has been created and signed in."
-            : "Authenticated actions are now unlocked.",
+      toast.success("Signed in", {
+        description: "Authenticated actions are now unlocked.",
       })
     } catch (error) {
       toast.error(authMode === "register" ? "Registration failed" : "Sign-in failed", {
@@ -274,6 +343,66 @@ export default function Page() {
       setIsAuthSubmitting(false)
     }
   }, [authEmail, authMode, authPassword, handleAuthDialogOpenChange, isAuthSubmitting])
+
+  const handleResendVerification = useCallback(async () => {
+    if (isResendingVerification) {
+      return
+    }
+
+    const email = authEmail.trim().toLowerCase()
+    if (!email) {
+      toast.error("Email required", {
+        description: "Enter your email first, then resend verification.",
+      })
+      return
+    }
+
+    setIsResendingVerification(true)
+
+    try {
+      const response = await fetch("/api/auth/resend-verification", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      })
+      const payload = await readJson<ResendVerificationResponse>(response)
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to resend verification email.")
+      }
+
+      if (payload?.alreadyVerified) {
+        toast.success("Email already verified", {
+          description: "You can sign in now.",
+        })
+        return
+      }
+
+      if (payload?.verificationEmailMode === "mock") {
+        toast.success("Verification link regenerated", {
+          description: payload.verificationPreviewUrl
+            ? `Open this link: ${payload.verificationPreviewUrl}`
+            : "Verification link available in server logs.",
+        })
+        return
+      }
+
+      toast.success("Verification email sent", {
+        description: "Check your inbox for a new verification link.",
+      })
+    } catch (error) {
+      toast.error("Resend failed", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not resend verification email.",
+      })
+    } finally {
+      setIsResendingVerification(false)
+    }
+  }, [authEmail, isResendingVerification])
 
   const handleSignOut = useCallback(async () => {
     await signOut({ redirect: false })
@@ -707,7 +836,7 @@ export default function Page() {
             </DialogTitle>
             <DialogDescription>
               {authMode === "register"
-                ? "Basic account access to protect add/edit/delete actions."
+                ? "Create credentials, then confirm your email before first sign-in."
                 : "Sign in to unlock add, edit, and delete actions."}
             </DialogDescription>
           </DialogHeader>
@@ -790,6 +919,20 @@ export default function Page() {
                   ? "Create account"
                   : "Sign in"}
             </Button>
+
+            {authMode === "login" ? (
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto justify-start px-0 text-xs"
+                onClick={() => void handleResendVerification()}
+                disabled={isResendingVerification || isAuthSubmitting}
+              >
+                {isResendingVerification
+                  ? "Resending verification..."
+                  : "Resend verification email"}
+              </Button>
+            ) : null}
           </form>
         </DialogContent>
       </Dialog>

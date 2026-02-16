@@ -268,7 +268,7 @@ function extractJsonCandidate(text: string): string {
   if (firstBrace >= 0 && lastBrace > firstBrace) {
     return text.slice(firstBrace, lastBrace + 1);
   }
-  return errorResponse("AI link enrichment service is unavailable.", 503);
+  return errorResponse(new NextResponse("AI link enrichment service is unavailable."), 503);
   return text.trim();
 }
 

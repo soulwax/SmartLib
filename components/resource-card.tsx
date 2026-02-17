@@ -170,6 +170,12 @@ export function ResourceCardItem({
     [],
   )
 
+  const handleContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    // Prevent the parent page-level context menu trigger from hijacking
+    // right-clicks that are meant for this card-specific menu.
+    event.stopPropagation()
+  }, [])
+
   const firstLink = resource.links[0]
   const allLinksText = resource.links.map((link) => link.url).join("\n")
 
@@ -181,6 +187,7 @@ export function ResourceCardItem({
           onMouseEnter={() => onHoverChange?.(resource)}
           onMouseLeave={() => onHoverChange?.(null)}
           onContextMenuCapture={handleContextMenuCapture}
+          onContextMenu={handleContextMenu}
         >
           <div className="mb-3 flex items-center justify-between">
             <Tooltip>

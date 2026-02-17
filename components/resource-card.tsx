@@ -1,37 +1,23 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 
 import type { ResourceCard } from "@/lib/resources"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { getTagToneClasses } from "@/lib/tag-styles"
 import { ExternalLink, Pencil, Trash2 } from "lucide-react"
 
-interface LinkPresentation {
-  hostname: string | null
-  faviconCandidates: string[]
-}
-
-function getLinkPresentation(url: string): LinkPresentation {
+function hostnameFromUrl(url: string): string | null {
   try {
-    const parsed = new URL(url)
-    const hostname = parsed.hostname
-
-    return {
-      hostname,
-      faviconCandidates: [
-        `${parsed.origin}/favicon.ico`,
-        `https://www.google.com/s2/favicons?domain=${encodeURIComponent(
-          hostname
-        )}&sz=64`,
-      ],
-    }
+    return new URL(url).hostname || null
   } catch {
-    return {
-      hostname: null,
-      faviconCandidates: [],
-    }
+    return null
   }
 }
 
@@ -39,66 +25,63 @@ function ResourceLinkCompactItem({
   label,
   note,
   url,
+  faviconUrl,
 }: {
   label: string
   note?: string | null
   url: string
+  faviconUrl?: string | null
 }) {
-  const linkPresentation = useMemo(() => getLinkPresentation(url), [url])
-  const [faviconIndex, setFaviconIndex] = useState(0)
-  const [faviconUnavailable, setFaviconUnavailable] = useState(false)
-
-  const faviconSrc = linkPresentation.faviconCandidates[faviconIndex]
+  const hostname = useMemo(() => hostnameFromUrl(url), [url])
 
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="group/link flex items-start gap-2 rounded-md border border-border/70 bg-secondary/20 p-2 transition-colors hover:border-primary/30 hover:bg-secondary/40"
-    >
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/70 bg-background">
-        {!faviconUnavailable && faviconSrc ? (
-          <img
-            src={faviconSrc}
-            alt=""
-            className="h-4 w-4"
-            loading="lazy"
-            onError={() => {
-              if (
-                faviconIndex <
-                linkPresentation.faviconCandidates.length - 1
-              ) {
-                setFaviconIndex((previous) => previous + 1)
-                return
-              }
-
-              setFaviconUnavailable(true)
-            }}
-          />
-        ) : (
-          <ExternalLink className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover/link:text-primary" />
-        )}
-      </span>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start gap-2">
-          <span className="truncate font-mono text-sm text-foreground transition-colors group-hover/link:text-primary">
-            {label}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="group/link flex items-start gap-2 rounded-md border border-border/70 bg-secondary/20 p-2 transition-colors hover:border-primary/30 hover:bg-secondary/40"
+        >
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/70 bg-background">
+            {faviconUrl ? (
+              <img
+                src={faviconUrl}
+                alt=""
+                className="h-4 w-4"
+                loading="lazy"
+              />
+            ) : (
+              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover/link:text-primary" />
+            )}
           </span>
-          {linkPresentation.hostname ? (
-            <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
-              {linkPresentation.hostname}
-            </span>
-          ) : null}
-        </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start gap-2">
+              <span className="truncate font-mono text-sm text-foreground transition-colors group-hover/link:text-primary">
+                {label}
+              </span>
+              {hostname ? (
+                <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
+                  {hostname}
+                </span>
+              ) : null}
+            </div>
+            {note ? (
+              <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                {note}
+              </p>
+            ) : null}
+          </div>
+        </a>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-xs">
+        <p className="break-all font-mono text-xs">{url}</p>
         {note ? (
-          <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-            {note}
-          </p>
+          <p className="mt-1 text-xs text-muted-foreground">{note}</p>
         ) : null}
-      </div>
-    </a>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -128,32 +111,51 @@ export function ResourceCardItem({
       onMouseLeave={() => onHoverChange?.(null)}
     >
       <div className="mb-3 flex items-center justify-between">
-        <Badge variant="secondary" className="font-medium">
-          {categorySymbol ? `${categorySymbol} ` : ""}
-          {resource.category}
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="secondary" className="cursor-default font-medium">
+              {categorySymbol ? `${categorySymbol} ` : ""}
+              {resource.category}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <span>Category: {resource.category}</span>
+          </TooltipContent>
+        </Tooltip>
         {canManage ? (
           <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              onClick={() => onEdit(resource)}
-              aria-label={`Edit ${resource.category} resource card`}
-              disabled={isDeleting}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-destructive"
-              onClick={() => onDelete(resource.id)}
-              aria-label={`Delete ${resource.category} resource card`}
-              disabled={isDeleting}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                  onClick={() => onEdit(resource)}
+                  aria-label={`Edit ${resource.category} resource card`}
+                  disabled={isDeleting}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Edit resource card</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                  onClick={() => onDelete(resource.id)}
+                  aria-label={`Delete ${resource.category} resource card`}
+                  disabled={isDeleting}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                Archive card (restorable from Admin Panel)
+              </TooltipContent>
+            </Tooltip>
           </div>
         ) : null}
       </div>
@@ -161,13 +163,19 @@ export function ResourceCardItem({
       {resource.tags.length > 0 ? (
         <div className="mb-3 flex flex-wrap gap-1.5">
           {resource.tags.map((tag) => (
-            <Badge
-              key={`${resource.id}-${tag}`}
-              variant="outline"
-              className={getTagToneClasses(tag)}
-            >
-              {tag}
-            </Badge>
+            <Tooltip key={`${resource.id}-${tag}`}>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant="outline"
+                  className={`cursor-default ${getTagToneClasses(tag)}`}
+                >
+                  {tag}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <span>Tag: {tag}</span>
+              </TooltipContent>
+            </Tooltip>
           ))}
         </div>
       ) : null}
@@ -179,6 +187,7 @@ export function ResourceCardItem({
               label={link.label}
               note={link.note}
               url={link.url}
+              faviconUrl={link.faviconUrl}
             />
           </li>
         ))}

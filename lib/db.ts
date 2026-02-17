@@ -287,6 +287,20 @@ export async function ensureSchema() {
       CREATE INDEX IF NOT EXISTS resource_audit_logs_actor_user_id_created_at_idx
       ON resource_audit_logs (actor_user_id, created_at DESC)
     `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS favicon_cache (
+        hostname TEXT PRIMARY KEY CHECK (char_length(hostname) <= 253),
+        favicon_url TEXT,
+        last_checked_at TIMESTAMPTZ NOT NULL,
+        last_changed_at TIMESTAMPTZ NOT NULL
+      )
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS favicon_cache_last_checked_at_idx
+      ON favicon_cache (last_checked_at ASC)
+    `;
   })();
 
   await schemaReady;

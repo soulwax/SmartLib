@@ -244,6 +244,23 @@ export const resourceAuditLogs = pgTable(
   ]
 )
 
+export const faviconCache = pgTable(
+  "favicon_cache",
+  {
+    hostname: text("hostname").primaryKey(),
+    faviconUrl: text("favicon_url"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }).notNull(),
+    lastChangedAt: timestamp("last_changed_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    check(
+      "favicon_cache_hostname_length_check",
+      sql`char_length(${table.hostname}) <= 253`
+    ),
+    index("favicon_cache_last_checked_at_idx").on(table.lastCheckedAt),
+  ]
+)
+
 export const resourceCardsRelations = relations(resourceCards, ({ many }) => ({
   links: many(resourceLinks),
 }))

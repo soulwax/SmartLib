@@ -32,6 +32,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Import path for route type definitions in `next-env.d.ts`
 - `onlyBuiltDependencies` configuration added for `sharp` in `package.json`
 
+## [0.1.2] - 2026-02-17
+
+### Changed
+- Categories left side panel now supports mouse-drag resizing on desktop layouts
+- Added resize width clamping for the Categories panel to keep it within usable min/max bounds
+
+## [0.1.1] - 2026-02-17
+
+### Changed
+- Main content links now render as compact item cards for denser scanning
+- Added favicon display to the left of each link title, with graceful icon fallback when unavailable
+
 ## [0.1.0] - 2026-02-11
 
 ### Added

@@ -3,6 +3,7 @@ export interface ResourceLink {
   url: string
   label: string
   note?: string | null
+  faviconUrl?: string | null
 }
 
 export interface ResourceCard {

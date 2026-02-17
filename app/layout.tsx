@@ -4,6 +4,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 
 import { AuthProvider } from "@/components/auth-provider";
 import { ColorSchemeProvider } from "@/components/color-scheme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 const inter = Inter({
@@ -35,7 +36,9 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body className="font-sans antialiased">
         <AuthProvider>
-          <ColorSchemeProvider>{children}</ColorSchemeProvider>
+          <ColorSchemeProvider>
+            <TooltipProvider delayDuration={400}>{children}</TooltipProvider>
+          </ColorSchemeProvider>
         </AuthProvider>
       </body>
     </html>

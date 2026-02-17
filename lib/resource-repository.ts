@@ -11,6 +11,8 @@ import {
   resourceLinks,
   resourceTags,
 } from "@/lib/db-schema"
+import { getFaviconUrlsByHostnames, upsertFaviconCache } from "@/lib/favicon-repository"
+import { hostnameFromUrl, resolveFaviconUrl, uniqueHostnames } from "@/lib/favicon-service"
 import type {
   ResourceAuditAction,
   ResourceAuditActor,
@@ -252,6 +254,49 @@ async function attachTags(resources: ResourceCard[]): Promise<ResourceCard[]> {
   }))
 }
 
+/**
+ * Fire-and-forget: resolve favicons for any hostnames that aren't yet cached.
+ * Errors are swallowed so they never block the main save path.
+ */
+async function seedFaviconCacheForUrls(urls: string[]): Promise<void> {
+  const hostnames = uniqueHostnames(urls)
+  if (hostnames.length === 0) return
+
+  const existing = await getFaviconUrlsByHostnames(hostnames)
+  const uncached = hostnames.filter((h) => !existing.has(h))
+
+  await Promise.allSettled(
+    uncached.map(async (hostname) => {
+      const faviconUrl = await resolveFaviconUrl(hostname)
+      await upsertFaviconCache(hostname, faviconUrl)
+    })
+  )
+}
+
+async function attachFavicons(resources: ResourceCard[]): Promise<ResourceCard[]> {
+  // Collect all unique hostnames across every link in every resource
+  const allHostnames = new Set<string>()
+  for (const resource of resources) {
+    for (const link of resource.links) {
+      const h = hostnameFromUrl(link.url)
+      if (h) allHostnames.add(h)
+    }
+  }
+
+  if (allHostnames.size === 0) return resources
+
+  const faviconByHostname = await getFaviconUrlsByHostnames([...allHostnames])
+
+  return resources.map((resource) => ({
+    ...resource,
+    links: resource.links.map((link) => {
+      const hostname = hostnameFromUrl(link.url)
+      const faviconUrl = hostname ? (faviconByHostname.get(hostname) ?? null) : null
+      return { ...link, faviconUrl }
+    }),
+  }))
+}
+
 async function findResourceById(
   id: string,
   options: { includeDeleted: boolean }
@@ -277,7 +322,7 @@ async function findResourceById(
     .where(whereCondition)
     .orderBy(asc(resourceLinks.position))
 
-  const resources = await attachTags(mapRowsToResources(rows))
+  const resources = await attachFavicons(await attachTags(mapRowsToResources(rows)))
   return resources[0] ?? null
 }
 
@@ -611,7 +656,7 @@ export async function listResources(): Promise<ResourceCard[]> {
     .where(isNull(resourceCards.deletedAt))
     .orderBy(desc(resourceCards.createdAt), asc(resourceLinks.position))
 
-  return attachTags(mapRowsToResources(rows))
+  return attachFavicons(await attachTags(mapRowsToResources(rows)))
 }
 
 export async function listResourcesIncludingDeleted(): Promise<ResourceCard[]> {
@@ -632,7 +677,7 @@ export async function listResourcesIncludingDeleted(): Promise<ResourceCard[]> {
     .leftJoin(resourceLinks, eq(resourceCards.id, resourceLinks.resourceId))
     .orderBy(desc(resourceCards.createdAt), asc(resourceLinks.position))
 
-  return attachTags(mapRowsToResources(rows))
+  return attachFavicons(await attachTags(mapRowsToResources(rows)))
 }
 
 export async function listResourceAuditLogs(
@@ -703,6 +748,9 @@ export async function createResource(input: ResourceInput): Promise<ResourceCard
 
   await setTagsForResource(createdCard.id, input.tags)
 
+  // Resolve and cache favicons for new links (non-blocking on failure)
+  void seedFaviconCacheForUrls(input.links.map((l) => l.url))
+
   const resource = await findResourceById(createdCard.id, { includeDeleted: false })
   if (!resource) {
     throw new Error("Failed to read created resource card.")
@@ -751,6 +799,9 @@ export async function updateResource(
   }
 
   await setTagsForResource(id, input.tags)
+
+  // Resolve and cache favicons for any newly added links (non-blocking on failure)
+  void seedFaviconCacheForUrls(input.links.map((l) => l.url))
 
   const resource = await findResourceById(id, { includeDeleted: false })
   if (!resource) {

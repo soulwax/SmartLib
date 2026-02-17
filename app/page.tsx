@@ -180,6 +180,17 @@ function mergeTags(existingTags: string[], nextTags: string[]): string[] {
   return merged;
 }
 
+const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 240;
+const DESKTOP_SIDEBAR_MIN_WIDTH = 196;
+const DESKTOP_SIDEBAR_MAX_WIDTH = 420;
+
+function clampDesktopSidebarWidth(width: number): number {
+  return Math.min(
+    DESKTOP_SIDEBAR_MAX_WIDTH,
+    Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, width),
+  );
+}
+
 export default function Page() {
   const { data: session, status: sessionStatus } = useSession();
   const [resources, setResources] = useState<ResourceCard[]>([]);
@@ -190,6 +201,10 @@ export default function Page() {
   const [searchQuery, setSearchQuery] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [desktopSidebarWidth, setDesktopSidebarWidth] = useState<number>(
+    DESKTOP_SIDEBAR_DEFAULT_WIDTH,
+  );
+  const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [editingResource, setEditingResource] = useState<ResourceCard | null>(
     null,
   );
@@ -983,6 +998,42 @@ export default function Page() {
     [],
   );
 
+  const handleDesktopSidebarResizeStart = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = desktopSidebarWidth;
+      setIsSidebarResizing(true);
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        const nextWidth = clampDesktopSidebarWidth(
+          startWidth + moveEvent.clientX - startX,
+        );
+        setDesktopSidebarWidth(nextWidth);
+      };
+
+      const stopResizing = () => {
+        setIsSidebarResizing(false);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", stopResizing);
+        window.removeEventListener("pointercancel", stopResizing);
+      };
+
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", stopResizing);
+      window.addEventListener("pointercancel", stopResizing);
+    },
+    [desktopSidebarWidth],
+  );
+
   const handlePasteIntoHoverTarget = useCallback(
     async (rawUrl: string, target: PasteHoverTarget) => {
       if (!canManageResources) {
@@ -1529,7 +1580,8 @@ export default function Page() {
 
       <div className="flex flex-1 overflow-hidden">
         <aside
-          className="hidden w-60 shrink-0 border-r border-border bg-card lg:block"
+          className="relative hidden shrink-0 border-r border-border bg-card lg:block"
+          style={{ width: `${desktopSidebarWidth}px` }}
           aria-label="Category navigation"
         >
           <CategorySidebar
@@ -1539,6 +1591,15 @@ export default function Page() {
             onHoverCategoryChange={handleCategoryHoverChange}
             resourceCounts={resourceCounts}
             categorySymbols={categorySymbols}
+          />
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize categories panel"
+            onPointerDown={handleDesktopSidebarResizeStart}
+            className={`absolute inset-y-0 right-0 z-10 w-3 translate-x-1/2 cursor-col-resize touch-none ${
+              isSidebarResizing ? "bg-primary/20" : ""
+            }`}
           />
         </aside>
 

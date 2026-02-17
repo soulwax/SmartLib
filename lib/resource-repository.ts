@@ -29,6 +29,7 @@ import {
   upsertFaviconCache,
 } from "@/lib/favicon-repository";
 import {
+  fallbackFaviconUrlForHostname,
   hostnameFromUrl,
   resolveFavicon,
   uniqueHostnames,
@@ -423,7 +424,8 @@ async function attachFavicons(
     links: resource.links.map((link) => {
       const hostname = hostnameFromUrl(link.url);
       const faviconUrl = hostname
-        ? (faviconByHostname.get(hostname) ?? null)
+        ? (faviconByHostname.get(hostname) ??
+          fallbackFaviconUrlForHostname(hostname))
         : null;
       return { ...link, faviconUrl };
     }),

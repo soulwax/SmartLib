@@ -1,6 +1,10 @@
 import "server-only"
 
 import { loadLibraryResourcesFromFile } from "@/lib/library-parser"
+import {
+  fallbackFaviconUrlForHostname,
+  hostnameFromUrl,
+} from "@/lib/favicon-service"
 import type {
   ResourceCategory,
   ResourceAuditAction,
@@ -36,7 +40,17 @@ function cloneResource(resource: ResourceCard): ResourceCard {
     ownerUserId: resource.ownerUserId ?? null,
     tags: [...(resource.tags ?? [])],
     deletedAt: resource.deletedAt ?? null,
-    links: resource.links.map((link) => ({ ...link })),
+    links: resource.links.map((link) => {
+      const hostname = hostnameFromUrl(link.url)
+      const faviconUrl =
+        link.faviconUrl ??
+        (hostname ? fallbackFaviconUrlForHostname(hostname) : null)
+
+      return {
+        ...link,
+        faviconUrl,
+      }
+    }),
   }
 }
 

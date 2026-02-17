@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 
 const RESOLVE_TIMEOUT_MS = 5_000
 const MAX_FAVICON_BYTES = 512 * 1024
+const DEFAULT_FAVICON_SIZE = 64
 
 export interface ResolvedFaviconPayload {
   sourceUrl: string
@@ -28,6 +29,19 @@ export function uniqueHostnames(urls: string[]): string[] {
     if (h) seen.add(h)
   }
   return [...seen]
+}
+
+export function fallbackFaviconUrlForHostname(
+  hostname: string,
+  size = DEFAULT_FAVICON_SIZE
+): string | null {
+  const normalizedHostname = hostname.trim().toLowerCase()
+  if (!normalizedHostname) {
+    return null
+  }
+
+  const normalizedSize = Math.max(16, Math.min(Math.floor(size), 256))
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(normalizedHostname)}&sz=${normalizedSize}`
 }
 
 function normalizeContentType(
@@ -119,8 +133,8 @@ export async function resolveFavicon(hostname: string): Promise<ResolvedFaviconP
 
   const candidateUrls = [
     `https://${hostname}/favicon.ico`,
-    `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`,
-  ]
+    fallbackFaviconUrlForHostname(hostname, DEFAULT_FAVICON_SIZE),
+  ].filter((url): url is string => Boolean(url))
 
   for (const sourceUrl of candidateUrls) {
     const resolved = await fetchFaviconAtUrl(sourceUrl)

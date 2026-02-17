@@ -228,6 +228,7 @@ export default function Page() {
   const isAuthenticated = Boolean(session?.user?.id);
   const isAdmin = Boolean(session?.user?.isAdmin);
   const isFirstAdmin = Boolean(session?.user?.isFirstAdmin);
+  const roleLabel = isFirstAdmin ? "FirstAdmin" : isAdmin ? "Admin" : "Viewer";
   const canManageResources = isAdmin;
   const canSubmitAuth = authEmail.trim().length > 0 && authPassword.length > 0;
   const canSubmitPromote =
@@ -1324,8 +1325,13 @@ export default function Page() {
               Knowledge
             </h1>
             {isAuthenticated && session?.user?.email ? (
-              <span className="inline-flex max-w-56 items-center rounded-full border border-border bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
-                <span className="truncate">{session.user.email}</span>
+              <span className="inline-flex max-w-56 flex-col rounded-xl border border-border bg-secondary px-2.5 py-1 leading-tight text-secondary-foreground">
+                <span className="truncate text-[11px] font-medium">
+                  {session.user.email}
+                </span>
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {roleLabel}
+                </span>
               </span>
             ) : null}
             <div className="inline-flex flex-col rounded-xl border border-border bg-secondary/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
@@ -1422,9 +1428,6 @@ export default function Page() {
             </span>
           ) : isAuthenticated ? (
             <>
-              <span className="hidden rounded-md bg-secondary px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-secondary-foreground sm:inline">
-                {isFirstAdmin ? "FirstAdmin" : isAdmin ? "Admin" : "Viewer"}
-              </span>
               {isFirstAdmin ? (
                 <Button
                   variant="outline"

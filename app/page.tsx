@@ -318,8 +318,9 @@ export default function Page() {
   const ownedWorkspaceCount =
     sessionUserId === null
       ? 0
-      : workspaces.filter((workspace) => workspace.ownerUserId === sessionUserId)
-          .length;
+      : workspaces.filter(
+          (workspace) => workspace.ownerUserId === sessionUserId,
+        ).length;
   const canCreateWorkspaces = isAuthenticated && ownedWorkspaceCount < 1;
   const canManageResources = isAuthenticated && canCreateResources(userRole);
   const canManageCategories = hasAdminAccess(userRole);
@@ -528,7 +529,7 @@ export default function Page() {
   const isSearchActive = searchQuery.trim().length > 0;
   const sectionRoleHint = useMemo(() => {
     if (!isAuthenticated) {
-      return "Guest mode: sign in to create workspaces, cards, and custom categories.";
+      return "Guest mode: sign in to create workspaces, categories, and copy paste with ai features etc.";
     }
 
     if (canManageCategories) {
@@ -1810,9 +1811,7 @@ export default function Page() {
             <div className="inline-flex flex-col rounded-xl border border-border bg-secondary/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
               <span>{resourcesInActiveWorkspace.length} cards</span>
               <span>{totalLinks} links</span>
-              <span className="max-w-40 truncate">
-                {workspaceDisplayName}
-              </span>
+              <span className="max-w-40 truncate">{workspaceDisplayName}</span>
               {dataMode === "mock" ? (
                 <span className="text-[10px] uppercase tracking-wide text-amber-600">
                   mock mode
@@ -1835,12 +1834,6 @@ export default function Page() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          {!isAuthenticated && sessionStatus !== "loading" ? (
-            <div className="hidden max-w-80 items-center rounded-full border border-border bg-secondary/40 px-3 py-1 text-[11px] text-muted-foreground xl:flex">
-              Signing in lets you create one private workspace, manage your
-              categories, and build a focused library without shared defaults.
-            </div>
-          ) : null}
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm">
@@ -2416,11 +2409,11 @@ export default function Page() {
                         ? `Nothing matches "${searchQuery}". Try a different search.`
                         : isAuthenticated && !hasActiveWorkspace
                           ? "Create your personal workspace to start organizing cards and categories."
-                        : canManageResources
-                          ? "Add your first resource to get started!"
-                          : isAuthenticated
-                            ? "You are signed in as read-only. Ask FirstAdmin for editor or admin access."
-                            : "Sign in to manage categories and resources based on your role."}
+                          : canManageResources
+                            ? "Add your first resource to get started!"
+                            : isAuthenticated
+                              ? "You are signed in as read-only. Ask FirstAdmin for editor or admin access."
+                              : "Sign in to manage categories and resources based on your role."}
                     </p>
                   </div>
                   {!searchQuery && isAuthenticated && !hasActiveWorkspace ? (

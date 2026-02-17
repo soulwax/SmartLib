@@ -327,9 +327,18 @@ export async function ensureSchema() {
     `;
 
     await sql`
-      UPDATE resource_cards
+      UPDATE resource_cards AS card
       SET
-        workspace_id = COALESCE(assigned.workspace_id, main_workspace.id),
+        workspace_id = COALESCE(
+          (
+            SELECT assigned.workspace_id
+            FROM resource_categories AS assigned
+            WHERE lower(assigned.name) = lower(card.category)
+            ORDER BY assigned.created_at ASC
+            LIMIT 1
+          ),
+          main_workspace.id
+        ),
         updated_at = NOW()
       FROM (
         SELECT id
@@ -339,9 +348,7 @@ export async function ensureSchema() {
         ORDER BY created_at ASC
         LIMIT 1
       ) AS main_workspace
-      LEFT JOIN resource_categories AS assigned
-        ON lower(assigned.name) = lower(resource_cards.category)
-      WHERE resource_cards.workspace_id IS NULL
+      WHERE card.workspace_id IS NULL
     `;
 
     await sql`

@@ -230,7 +230,7 @@ function snapSidebarWidth(width: number): number {
 function getDesktopSidebarMaxWidth(viewportWidth: number): number {
   return Math.max(
     DESKTOP_SIDEBAR_MIN_WIDTH,
-    Math.floor(viewportWidth * 0.5 / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID,
+    Math.floor((viewportWidth * 0.5) / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID,
   );
 }
 
@@ -398,7 +398,9 @@ export default function Page() {
       return null;
     }
 
-    return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+    return (
+      workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null
+    );
   }, [activeWorkspaceId, workspaces]);
 
   const workspaceResourceCounts = useMemo(() => {
@@ -414,7 +416,9 @@ export default function Page() {
       return [];
     }
 
-    return resources.filter((resource) => resource.workspaceId === activeWorkspaceId);
+    return resources.filter(
+      (resource) => resource.workspaceId === activeWorkspaceId,
+    );
   }, [activeWorkspaceId, resources]);
 
   const resourceCounts = useMemo(() => {
@@ -650,7 +654,10 @@ export default function Page() {
     }
 
     setActiveWorkspaceId((previous) => {
-      if (previous && workspaces.some((workspace) => workspace.id === previous)) {
+      if (
+        previous &&
+        workspaces.some((workspace) => workspace.id === previous)
+      ) {
         return previous;
       }
 
@@ -663,7 +670,10 @@ export default function Page() {
       return;
     }
 
-    window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, activeWorkspaceId);
+    window.localStorage.setItem(
+      ACTIVE_WORKSPACE_STORAGE_KEY,
+      activeWorkspaceId,
+    );
   }, [activeWorkspaceId]);
 
   useEffect(() => {
@@ -1037,7 +1047,9 @@ export default function Page() {
     } catch (error) {
       toast.error("Workspace creation failed", {
         description:
-          error instanceof Error ? error.message : "Could not create workspace.",
+          error instanceof Error
+            ? error.message
+            : "Could not create workspace.",
       });
     } finally {
       setIsWorkspaceMutating(false);
@@ -1142,7 +1154,9 @@ export default function Page() {
         });
         const payload = await readJson<CategoryResponse>(response);
         if (!response.ok || !payload?.category) {
-          throw new Error(payload?.error ?? "Failed to update category symbol.");
+          throw new Error(
+            payload?.error ?? "Failed to update category symbol.",
+          );
         }
         const updatedCategory = payload.category;
 
@@ -1517,7 +1531,9 @@ export default function Page() {
 
       event.preventDefault();
       const delta =
-        event.key === "ArrowRight" ? SIDEBAR_KEYBOARD_STEP : -SIDEBAR_KEYBOARD_STEP;
+        event.key === "ArrowRight"
+          ? SIDEBAR_KEYBOARD_STEP
+          : -SIDEBAR_KEYBOARD_STEP;
       setDesktopSidebarWidth((currentWidth) =>
         clampDesktopSidebarWidth(currentWidth + delta, window.innerWidth),
       );
@@ -2223,7 +2239,9 @@ export default function Page() {
                   onClick={handleOpenCreateResourceModal}
                   className="gap-2"
                   size="sm"
-                  disabled={isLoading || Boolean(loadError) || !activeWorkspaceId}
+                  disabled={
+                    isLoading || Boolean(loadError) || !activeWorkspaceId
+                  }
                 >
                   <Plus className="h-4 w-4" />
                   <span className="hidden sm:inline">Add Resource</span>
@@ -2269,7 +2287,9 @@ export default function Page() {
 
         <aside
           className={`group/sidebar relative hidden shrink-0 border-r border-border bg-card md:block ${
-            isSidebarResizing ? "" : "transition-[width] duration-200 ease-in-out"
+            isSidebarResizing
+              ? ""
+              : "transition-[width] duration-200 ease-in-out"
           }`}
           style={{ width: `${desktopSidebarWidth}px` }}
           aria-label="Category navigation"
@@ -2282,7 +2302,9 @@ export default function Page() {
             resourceCounts={resourceCounts}
             categorySymbols={categorySymbols}
             canManageCategories={canManageCategories}
-            canPasteIntoCategory={canManageResources && Boolean(activeWorkspaceId)}
+            canPasteIntoCategory={
+              canManageResources && Boolean(activeWorkspaceId)
+            }
             onCreateCategory={handleOpenCreateCategoryDialog}
             onEditCategorySymbol={(category) => {
               void handleUpdateCategorySymbolByName(category);
@@ -2408,7 +2430,7 @@ export default function Page() {
                   <p className="max-w-xl text-sm text-muted-foreground">
                     {loadError}
                   </p>
-                  <Button onClick={() => void fetchResources()} size="sm">
+                  <Button onClick={handleRefreshLibrary} size="sm">
                     Retry
                   </Button>
                 </div>
@@ -2475,7 +2497,9 @@ export default function Page() {
             {canManageResources ? (
               <>
                 <ContextMenuItem
-                  disabled={isLoading || Boolean(loadError) || !activeWorkspaceId}
+                  disabled={
+                    isLoading || Boolean(loadError) || !activeWorkspaceId
+                  }
                   onSelect={handleOpenCreateResourceModal}
                 >
                   <Plus className="mr-2 h-4 w-4" />
@@ -2542,7 +2566,8 @@ export default function Page() {
           <DialogHeader>
             <DialogTitle>Create Workspace</DialogTitle>
             <DialogDescription>
-              Workspaces are personal spaces for organizing categories and cards.
+              Workspaces are personal spaces for organizing categories and
+              cards.
             </DialogDescription>
           </DialogHeader>
 

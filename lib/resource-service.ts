@@ -92,7 +92,7 @@ async function ensureDatabaseBootstrapped() {
 
     for (const resource of libraryResources) {
       await createDbResource(toResourceInput(resource), {
-        ownerUserId: firstAdminUserId,
+        ownerUserId: null,
       })
     }
 

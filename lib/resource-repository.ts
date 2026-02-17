@@ -84,6 +84,13 @@ export class ResourceWorkspaceAlreadyExistsError extends Error {
   }
 }
 
+export class ResourceWorkspaceLimitReachedError extends Error {
+  constructor(limit: number) {
+    super(`Workspace limit reached. You can create up to ${limit} workspace.`);
+    this.name = "ResourceWorkspaceLimitReachedError";
+  }
+}
+
 interface ResourceWorkspaceRow {
   id: string;
   name: string;
@@ -231,7 +238,7 @@ function isWorkspaceVisibleToUser(
   userId: string | null,
 ): boolean {
   if (!workspaceOwnerUserId) {
-    return true;
+    return userId === null;
   }
 
   if (!userId) {
@@ -528,6 +535,32 @@ async function findWorkspaceById(
   return normalizeWorkspaceRow(row as ResourceWorkspaceRow);
 }
 
+async function findFirstOwnedWorkspace(
+  userId: string,
+): Promise<ResourceWorkspace | null> {
+  const db = getDb();
+
+  const rows = await db
+    .select({
+      id: resourceWorkspaces.id,
+      name: resourceWorkspaces.name,
+      ownerUserId: resourceWorkspaces.ownerUserId,
+      createdAt: resourceWorkspaces.createdAt,
+      updatedAt: resourceWorkspaces.updatedAt,
+    })
+    .from(resourceWorkspaces)
+    .where(eq(resourceWorkspaces.ownerUserId, userId))
+    .orderBy(asc(resourceWorkspaces.createdAt))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return normalizeWorkspaceRow(row as ResourceWorkspaceRow);
+}
+
 async function listVisibleWorkspaceIds(
   userId?: string | null,
 ): Promise<string[]> {
@@ -537,10 +570,7 @@ async function listVisibleWorkspaceIds(
   await ensureMainWorkspace();
 
   const condition = normalizedUserId
-    ? or(
-        isNull(resourceWorkspaces.ownerUserId),
-        eq(resourceWorkspaces.ownerUserId, normalizedUserId),
-      )
+    ? eq(resourceWorkspaces.ownerUserId, normalizedUserId)
     : isNull(resourceWorkspaces.ownerUserId);
 
   const rows = await db
@@ -581,6 +611,16 @@ async function resolveWorkspaceForInput(
 ): Promise<ResourceWorkspace> {
   if (workspaceId?.trim()) {
     return requireVisibleWorkspace(workspaceId, userId);
+  }
+
+  const normalizedUserId = normalizeActorUserId(userId);
+  if (normalizedUserId) {
+    const ownedWorkspace = await findFirstOwnedWorkspace(normalizedUserId);
+    if (!ownedWorkspace) {
+      throw new ResourceWorkspaceNotFoundError("personal-workspace");
+    }
+
+    return ownedWorkspace;
   }
 
   return ensureMainWorkspace();
@@ -918,10 +958,7 @@ export async function listResourceWorkspaces(options?: {
   await ensureMainWorkspace();
 
   const whereCondition = normalizedUserId
-    ? or(
-        isNull(resourceWorkspaces.ownerUserId),
-        eq(resourceWorkspaces.ownerUserId, normalizedUserId),
-      )
+    ? eq(resourceWorkspaces.ownerUserId, normalizedUserId)
     : isNull(resourceWorkspaces.ownerUserId);
 
   const rows = await db
@@ -968,6 +1005,16 @@ export async function createResourceWorkspace(
 
   if (ownerRows.length === 0) {
     throw new Error("Owner user does not exist.");
+  }
+
+  const existingWorkspaceRows = await db
+    .select({ id: resourceWorkspaces.id })
+    .from(resourceWorkspaces)
+    .where(eq(resourceWorkspaces.ownerUserId, normalizedOwnerUserId))
+    .limit(1);
+
+  if (existingWorkspaceRows.length >= 1) {
+    throw new ResourceWorkspaceLimitReachedError(1);
   }
 
   try {

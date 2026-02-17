@@ -314,7 +314,13 @@ export default function Page() {
         : userRole === "editor"
           ? "Editor"
           : "Viewer";
-  const canCreateWorkspaces = isAuthenticated;
+  const sessionUserId = session?.user?.id ?? null;
+  const ownedWorkspaceCount =
+    sessionUserId === null
+      ? 0
+      : workspaces.filter((workspace) => workspace.ownerUserId === sessionUserId)
+          .length;
+  const canCreateWorkspaces = isAuthenticated && ownedWorkspaceCount < 1;
   const canManageResources = isAuthenticated && canCreateResources(userRole);
   const canManageCategories = hasAdminAccess(userRole);
   const canSubmitAuth = authEmail.trim().length > 0 && authPassword.length > 0;
@@ -330,7 +336,6 @@ export default function Page() {
     canManageCategories &&
     Boolean(activeWorkspaceId);
   const desktopSidebarMaxWidth = getDesktopSidebarMaxWidth(getViewportWidth());
-  const sessionUserId = session?.user?.id ?? null;
   const updateSectionPreference = useCallback(
     (key: keyof SectionPreferences, checked: boolean) => {
       setSectionPreferences((previous) => ({
@@ -395,6 +400,7 @@ export default function Page() {
       workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null
     );
   }, [activeWorkspaceId, workspaces]);
+  const hasActiveWorkspace = Boolean(activeWorkspaceId);
 
   const workspaceResourceCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -535,11 +541,16 @@ export default function Page() {
 
     return "Viewer mode: browse only. Ask FirstAdmin for elevated access.";
   }, [canManageCategories, canManageResources, isAuthenticated]);
+  const workspaceDisplayName = activeWorkspace?.name
+    ? activeWorkspace.name
+    : isAuthenticated
+      ? "No Workspace"
+      : "Main Workspace";
   const sidebarHeadingLabel = sectionPreferences.compactTitles
     ? "Explorer"
     : "Category Explorer";
   const sidebarHeadingMeta = sectionPreferences.showContextLine
-    ? `${activeWorkspace?.name ?? "Main Workspace"} / ${categories.length} categories`
+    ? `${workspaceDisplayName} / ${categories.length} categories`
     : undefined;
   const mainSectionPillLabel = isSearchActive
     ? "Search Results"
@@ -547,13 +558,13 @@ export default function Page() {
       ? "Resource Library"
       : "Category Focus";
   const mainSectionMetaLine = sectionPreferences.showContextLine
-    ? `Workspace: ${activeWorkspace?.name ?? "Main Workspace"}`
+    ? `Workspace: ${workspaceDisplayName}`
     : null;
   const capabilityBadges = useMemo(() => {
     const badges: string[] = [];
 
-    if (canCreateWorkspaces) {
-      badges.push("Workspaces");
+    if (isAuthenticated) {
+      badges.push(`Workspaces ${Math.min(ownedWorkspaceCount, 1)}/1`);
     }
     if (canManageResources) {
       badges.push("Cards");
@@ -566,7 +577,13 @@ export default function Page() {
     }
 
     return badges;
-  }, [canCreateWorkspaces, canManageCategories, canManageResources, isAdmin]);
+  }, [
+    canManageCategories,
+    canManageResources,
+    isAdmin,
+    isAuthenticated,
+    ownedWorkspaceCount,
+  ]);
 
   const totalLinks = useMemo(
     () =>
@@ -1731,15 +1748,22 @@ export default function Page() {
   }, [activeWorkspaceId, canManageCategories]);
 
   const handleOpenCreateWorkspaceDialog = useCallback(() => {
-    if (!canCreateWorkspaces) {
+    if (!isAuthenticated) {
       toast.error("Authentication required", {
         description: "Sign in to create personal workspaces.",
       });
       return;
     }
 
+    if (!canCreateWorkspaces) {
+      toast.error("Workspace limit reached", {
+        description: "Each account can create only one personal workspace.",
+      });
+      return;
+    }
+
     setCreateWorkspaceDialogOpen(true);
-  }, [canCreateWorkspaces]);
+  }, [canCreateWorkspaces, isAuthenticated]);
 
   const handleRefreshLibrary = useCallback(() => {
     void Promise.all([fetchResources(), fetchCategories(), fetchWorkspaces()]);
@@ -1787,7 +1811,7 @@ export default function Page() {
               <span>{resourcesInActiveWorkspace.length} cards</span>
               <span>{totalLinks} links</span>
               <span className="max-w-40 truncate">
-                {activeWorkspace?.name ?? "Main Workspace"}
+                {workspaceDisplayName}
               </span>
               {dataMode === "mock" ? (
                 <span className="text-[10px] uppercase tracking-wide text-amber-600">
@@ -1813,9 +1837,8 @@ export default function Page() {
         <div className="ml-auto flex items-center gap-2">
           {!isAuthenticated && sessionStatus !== "loading" ? (
             <div className="hidden max-w-80 items-center rounded-full border border-border bg-secondary/40 px-3 py-1 text-[11px] text-muted-foreground xl:flex">
-              Signing in lets you create your own private workspace, administer
-              your own categories, and paste links with AI interpretation. You
-              can start fresh by disabling the default workspace.
+              Signing in lets you create one private workspace, manage your
+              categories, and build a focused library without shared defaults.
             </div>
           ) : null}
           <Popover>
@@ -2232,7 +2255,7 @@ export default function Page() {
                 }
               >
                 {sectionPreferences.showContextLine
-                  ? `Filter categories in ${activeWorkspace?.name ?? "Main Workspace"}`
+                  ? `Filter categories in ${workspaceDisplayName}`
                   : "Filter resources by category"}
               </SheetDescription>
             </SheetHeader>
@@ -2391,6 +2414,8 @@ export default function Page() {
                     <p className="mt-1 text-sm text-muted-foreground">
                       {searchQuery
                         ? `Nothing matches "${searchQuery}". Try a different search.`
+                        : isAuthenticated && !hasActiveWorkspace
+                          ? "Create your personal workspace to start organizing cards and categories."
                         : canManageResources
                           ? "Add your first resource to get started!"
                           : isAuthenticated
@@ -2398,7 +2423,17 @@ export default function Page() {
                             : "Sign in to manage categories and resources based on your role."}
                     </p>
                   </div>
-                  {!searchQuery && canManageResources ? (
+                  {!searchQuery && isAuthenticated && !hasActiveWorkspace ? (
+                    <Button
+                      onClick={handleOpenCreateWorkspaceDialog}
+                      className="gap-2"
+                      disabled={!canCreateWorkspaces}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Create Workspace
+                    </Button>
+                  ) : null}
+                  {!searchQuery && canManageResources && hasActiveWorkspace ? (
                     <Button
                       onClick={handleOpenCreateResourceModal}
                       className="gap-2"
@@ -2498,8 +2533,8 @@ export default function Page() {
           <DialogHeader>
             <DialogTitle>Create Workspace</DialogTitle>
             <DialogDescription>
-              Workspaces are personal spaces for organizing categories and
-              cards.
+              Each account gets one personal workspace for organizing cards and
+              categories.
             </DialogDescription>
           </DialogHeader>
 
@@ -2540,7 +2575,7 @@ export default function Page() {
             <DialogTitle>Create Category</DialogTitle>
             <DialogDescription>
               Category will be created in{" "}
-              <strong>{activeWorkspace?.name ?? "Main Workspace"}</strong>.
+              <strong>{workspaceDisplayName}</strong>.
             </DialogDescription>
           </DialogHeader>
 

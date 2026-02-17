@@ -20,6 +20,7 @@ import {
   ResourceCategoryNotFoundError,
   ResourceNotFoundError,
   ResourceWorkspaceAlreadyExistsError,
+  ResourceWorkspaceLimitReachedError,
   ResourceWorkspaceNotFoundError,
 } from "@/lib/resource-repository"
 
@@ -116,7 +117,7 @@ function isWorkspaceVisibleToUser(
   userId: string | null
 ): boolean {
   if (!workspaceOwnerUserId) {
-    return true
+    return userId === null
   }
 
   if (!userId) {
@@ -278,12 +279,32 @@ function listVisibleWorkspaceIds(userId?: string | null): string[] {
     .map((workspace) => workspace.id)
 }
 
+function findFirstOwnedWorkspace(userId: string): ResourceWorkspace | null {
+  const workspace = [...(mockWorkspaces ?? [])]
+    .filter((item) => item.ownerUserId === userId)
+    .sort((left, right) =>
+      (left.createdAt ?? "").localeCompare(right.createdAt ?? "")
+    )[0]
+
+  return workspace ?? null
+}
+
 function resolveWorkspaceForInput(
   workspaceId: string | undefined,
   actorUserId?: string | null
 ): ResourceWorkspace {
   if (workspaceId?.trim()) {
     return requireVisibleWorkspace(workspaceId, actorUserId)
+  }
+
+  const normalizedActorUserId = normalizeActorUserId(actorUserId)
+  if (normalizedActorUserId) {
+    const ownedWorkspace = findFirstOwnedWorkspace(normalizedActorUserId)
+    if (!ownedWorkspace) {
+      throw new ResourceWorkspaceNotFoundError("personal-workspace")
+    }
+
+    return ownedWorkspace
   }
 
   return ensureMainWorkspace()
@@ -337,6 +358,14 @@ export async function createMockResourceWorkspace(
 
   if (!normalizedName) {
     throw new Error("Workspace name is required.")
+  }
+
+  const ownedWorkspaceCount = (mockWorkspaces ?? []).filter(
+    (workspace) => (workspace.ownerUserId ?? null) === normalizedOwnerUserId
+  ).length
+
+  if (ownedWorkspaceCount >= 1) {
+    throw new ResourceWorkspaceLimitReachedError(1)
   }
 
   const exists = (mockWorkspaces ?? []).some(

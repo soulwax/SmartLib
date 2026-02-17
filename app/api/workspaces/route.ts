@@ -2,7 +2,10 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
-import { ResourceWorkspaceAlreadyExistsError } from "@/lib/resource-repository"
+import {
+  ResourceWorkspaceAlreadyExistsError,
+  ResourceWorkspaceLimitReachedError,
+} from "@/lib/resource-repository"
 import {
   createResourceWorkspaceService,
   listResourceWorkspacesService,
@@ -72,6 +75,10 @@ export async function POST(request: Request) {
     }
 
     if (error instanceof ResourceWorkspaceAlreadyExistsError) {
+      return errorResponse(error.message, 409)
+    }
+
+    if (error instanceof ResourceWorkspaceLimitReachedError) {
       return errorResponse(error.message, 409)
     }
 

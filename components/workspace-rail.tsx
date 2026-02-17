@@ -72,7 +72,7 @@ export function WorkspaceRail({
     <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
       <div
         className={cn(
-          "flex gap-2 p-3",
+          "flex gap-1.5 p-2",
           isVertical ? "h-full flex-col items-center" : "items-center",
         )}
       >
@@ -91,16 +91,16 @@ export function WorkspaceRail({
                   aria-current={isActive ? "page" : undefined}
                   aria-label={workspace.name}
                   className={cn(
-                    "relative flex h-11 w-11 items-center justify-center overflow-hidden border text-sm font-semibold transition-all",
+                    "relative flex h-9 w-9 items-center justify-center overflow-hidden border text-xs font-semibold transition-all",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     isActive
-                      ? "rounded-2xl border-primary bg-primary text-primary-foreground shadow-sm"
-                      : "rounded-full border-border bg-secondary text-secondary-foreground hover:rounded-2xl hover:bg-accent hover:text-accent-foreground",
+                      ? "rounded-xl border-primary bg-primary text-primary-foreground shadow-sm"
+                      : "rounded-full border-border bg-secondary text-secondary-foreground hover:rounded-xl hover:bg-accent hover:text-accent-foreground",
                   )}
                 >
                   <span>{badge}</span>
                   {isSharedWorkspace ? (
-                    <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-card bg-emerald-500" />
+                    <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full border border-card bg-emerald-500" />
                   ) : null}
                 </button>
               </TooltipTrigger>
@@ -119,13 +119,13 @@ export function WorkspaceRail({
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "h-11 w-11 rounded-full border border-dashed border-border text-muted-foreground transition-all hover:rounded-2xl hover:text-foreground",
+                  "h-9 w-9 rounded-full border border-dashed border-border text-muted-foreground transition-all hover:rounded-xl hover:text-foreground",
                   isVertical ? "mt-1" : undefined,
                 )}
                 onClick={onCreateWorkspace}
                 aria-label="Create workspace"
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side={isVertical ? "right" : "bottom"}>

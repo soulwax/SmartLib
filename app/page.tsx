@@ -2269,7 +2269,7 @@ export default function Page() {
 
       <div className="flex flex-1 overflow-hidden">
         <aside
-          className="hidden w-20 shrink-0 border-r border-border bg-card md:block"
+          className="hidden w-16 shrink-0 border-r border-border bg-card md:block"
           aria-label="Workspace navigation"
         >
           <WorkspaceRail

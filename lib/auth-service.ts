@@ -10,15 +10,18 @@ import {
   findUserByEmail as findDbUser,
   findUserById as findDbUserById,
   hasFirstAdmin as hasDbFirstAdmin,
+  listUsers as listDbUsers,
   makeUserExclusiveFirstAdmin as makeDbUserExclusiveFirstAdmin,
   markUserAsAdmin as markDbUserAsAdmin,
   markUserAsFirstAdmin as markDbUserAsFirstAdmin,
   markUserEmailVerified as markDbUserEmailVerified,
   type AuthUserRecord,
+  updateUserRole as updateDbUserRole,
   updateUserPasswordHash as updateDbUserPasswordHash,
   UserAlreadyExistsError,
   UserNotFoundError,
 } from "@/lib/auth-repository"
+import type { UserRole } from "@/lib/authorization"
 import { hasDatabaseEnv, getOptionalSuperAdminEnv } from "@/lib/env"
 import { hashPassword, verifyPassword } from "@/lib/password"
 
@@ -78,6 +81,7 @@ function cloneUserRecord(user: AuthUserRecord): AuthUserRecord {
     id: user.id,
     email: user.email,
     passwordHash: user.passwordHash,
+    role: user.role,
     isAdmin: user.isAdmin,
     isFirstAdmin: user.isFirstAdmin,
     emailVerifiedAt: user.emailVerifiedAt,
@@ -286,6 +290,7 @@ async function ensureMockSuperAdminSeeded(username: string, password: string) {
 
   if (existing) {
     existing.passwordHash = passwordHash
+    existing.role = "first_admin"
     existing.isAdmin = true
     existing.isFirstAdmin = true
     existing.emailVerifiedAt = existing.emailVerifiedAt ?? now
@@ -297,6 +302,7 @@ async function ensureMockSuperAdminSeeded(username: string, password: string) {
     id: crypto.randomUUID(),
     email: username,
     passwordHash,
+    role: "first_admin",
     isAdmin: true,
     isFirstAdmin: true,
     emailVerifiedAt: now,
@@ -442,6 +448,7 @@ export async function registerAuthUser(
     id: crypto.randomUUID(),
     email: normalizedEmail,
     passwordHash,
+    role: "editor",
     isAdmin: false,
     isFirstAdmin: false,
     emailVerifiedAt: null,
@@ -630,6 +637,7 @@ export async function ensureAuthUserForSignIn(
       id: crypto.randomUUID(),
       email: normalizedIdentifier,
       passwordHash: null,
+      role: "editor",
       isAdmin: false,
       isFirstAdmin: false,
       emailVerifiedAt: null,
@@ -643,9 +651,11 @@ export async function ensureAuthUserForSignIn(
 
   if (configuredSuperAdmin && configuredSuperAdmin.username === normalizedIdentifier) {
     for (const existing of mockUsersByEmail.values()) {
+      existing.role = existing.isFirstAdmin ? "admin" : existing.role
       existing.isFirstAdmin = false
     }
 
+    user.role = "first_admin"
     user.isAdmin = true
     user.isFirstAdmin = true
   } else if (!configuredSuperAdmin) {
@@ -654,6 +664,7 @@ export async function ensureAuthUserForSignIn(
     )
 
     if (!hasFirstAdmin) {
+      user.role = "first_admin"
       user.isAdmin = true
       user.isFirstAdmin = true
     }
@@ -723,11 +734,97 @@ export async function promoteAuthUserToAdmin(
   }
 
   targetUser.isAdmin = true
+  targetUser.role = "admin"
   mockUsersByEmail.set(normalizedTarget, targetUser)
 
   return {
     mode,
     user: cloneUserRecord(targetUser),
+  }
+}
+
+export async function listAuthUsers(
+  limit = 500
+): Promise<{ mode: AuthDataMode; users: AuthUserRecord[] }> {
+  const mode = currentMode()
+  await ensureSuperAdminSeeded()
+
+  if (mode === "database") {
+    return {
+      mode,
+      users: await listDbUsers(limit),
+    }
+  }
+
+  const boundedLimit = Math.max(1, Math.min(limit, 2000))
+  const users = [...mockUsersByEmail.values()]
+    .slice()
+    .sort((left, right) => left.email.localeCompare(right.email))
+    .slice(0, boundedLimit)
+    .map(cloneUserRecord)
+
+  return {
+    mode,
+    users,
+  }
+}
+
+export async function updateAuthUserRole(
+  userId: string,
+  role: UserRole
+): Promise<{ mode: AuthDataMode; user: AuthUserRecord }> {
+  const mode = currentMode()
+  await ensureSuperAdminSeeded()
+
+  if (mode === "database") {
+    const user = await updateDbUserRole(userId, role)
+    return { mode, user }
+  }
+
+  const targetUser = [...mockUsersByEmail.values()].find((user) => user.id === userId)
+  if (!targetUser) {
+    throw new UserNotFoundError(userId)
+  }
+
+  if (role === "first_admin") {
+    for (const existing of mockUsersByEmail.values()) {
+      if (existing.id !== userId && existing.isFirstAdmin) {
+        existing.isFirstAdmin = false
+        existing.isAdmin = true
+        existing.role = "admin"
+      }
+    }
+  }
+
+  targetUser.role = role
+  targetUser.isAdmin = role === "admin" || role === "first_admin"
+  targetUser.isFirstAdmin = role === "first_admin"
+  mockUsersByEmail.set(targetUser.email, targetUser)
+
+  return {
+    mode,
+    user: cloneUserRecord(targetUser),
+  }
+}
+
+export async function findFirstAdminAuthUser(): Promise<{
+  mode: AuthDataMode
+  user: AuthUserRecord | null
+}> {
+  const mode = currentMode()
+  await ensureSuperAdminSeeded()
+
+  if (mode === "database") {
+    const users = await listDbUsers(500)
+    const firstAdmin = users.find((user) => user.isFirstAdmin) ?? null
+    return { mode, user: firstAdmin }
+  }
+
+  const user =
+    [...mockUsersByEmail.values()].find((candidate) => candidate.isFirstAdmin) ?? null
+  return {
+    mode,
+    user: user ? cloneUserRecord(user) : null,
   }
 }
 

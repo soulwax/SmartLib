@@ -135,7 +135,9 @@ export function parseLibraryMarkdown(markdown: string): ResourceCard[] {
     linkGroups.forEach((group) => {
       resources.push({
         id: crypto.randomUUID(),
+        workspaceId: "main",
         category,
+        ownerUserId: null,
         tags: [],
         links: group,
       })

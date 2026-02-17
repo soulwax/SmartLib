@@ -15,7 +15,13 @@ export const resourceCards = pgTable(
   "resource_cards",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => resourceWorkspaces.id, { onDelete: "cascade" }),
     category: text("category").notNull(),
+    ownerUserId: uuid("owner_user_id").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -30,6 +36,8 @@ export const resourceCards = pgTable(
       sql`char_length(${table.category}) <= 80`
     ),
     index("resource_cards_created_at_idx").on(table.createdAt),
+    index("resource_cards_workspace_id_idx").on(table.workspaceId),
+    index("resource_cards_owner_user_id_idx").on(table.ownerUserId),
   ]
 )
 
@@ -37,8 +45,14 @@ export const resourceCategories = pgTable(
   "resource_categories",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => resourceWorkspaces.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     symbol: text("symbol"),
+    ownerUserId: uuid("owner_user_id").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -55,8 +69,42 @@ export const resourceCategories = pgTable(
       "resource_categories_symbol_length_check",
       sql`${table.symbol} IS NULL OR char_length(${table.symbol}) <= 16`
     ),
-    uniqueIndex("resource_categories_name_lower_idx").on(sql`lower(${table.name})`),
+    uniqueIndex("resource_categories_workspace_name_lower_idx").on(
+      table.workspaceId,
+      sql`lower(${table.name})`
+    ),
     index("resource_categories_created_at_idx").on(table.createdAt),
+    index("resource_categories_workspace_id_idx").on(table.workspaceId),
+    index("resource_categories_owner_user_id_idx").on(table.ownerUserId),
+  ]
+)
+
+export const resourceWorkspaces = pgTable(
+  "resource_workspaces",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    ownerUserId: uuid("owner_user_id").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      "resource_workspaces_name_length_check",
+      sql`char_length(${table.name}) <= 80`
+    ),
+    uniqueIndex("resource_workspaces_owner_name_lower_idx").on(
+      sql`coalesce(${table.ownerUserId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+      sql`lower(${table.name})`
+    ),
+    index("resource_workspaces_created_at_idx").on(table.createdAt),
+    index("resource_workspaces_owner_user_id_idx").on(table.ownerUserId),
   ]
 )
 
@@ -137,6 +185,7 @@ export const appUsers = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     email: text("email").notNull(),
     passwordHash: text("password_hash"),
+    role: text("role").default("editor").notNull(),
     isAdmin: boolean("is_admin").default(false).notNull(),
     isFirstAdmin: boolean("is_first_admin").default(false).notNull(),
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
@@ -146,6 +195,10 @@ export const appUsers = pgTable(
   },
   (table) => [
     check("app_users_email_length_check", sql`char_length(${table.email}) <= 320`),
+    check(
+      "app_users_role_check",
+      sql`${table.role} IN ('viewer', 'editor', 'admin', 'first_admin')`
+    ),
     uniqueIndex("app_users_email_lower_idx").on(sql`lower(${table.email})`),
     uniqueIndex("app_users_single_first_admin_idx")
       .on(table.isFirstAdmin)

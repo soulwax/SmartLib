@@ -52,6 +52,7 @@ export async function ensureSchema() {
       CREATE TABLE IF NOT EXISTS resource_cards (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         category TEXT NOT NULL CHECK (char_length(category) <= 80),
+        owner_user_id UUID,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         deleted_at TIMESTAMPTZ
@@ -64,10 +65,16 @@ export async function ensureSchema() {
     `;
 
     await sql`
+      ALTER TABLE resource_cards
+      ADD COLUMN IF NOT EXISTS owner_user_id UUID
+    `;
+
+    await sql`
       CREATE TABLE IF NOT EXISTS resource_categories (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         name TEXT NOT NULL CHECK (char_length(name) <= 80),
         symbol TEXT,
+        owner_user_id UUID,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
@@ -79,8 +86,8 @@ export async function ensureSchema() {
     `;
 
     await sql`
-      CREATE UNIQUE INDEX IF NOT EXISTS resource_categories_name_lower_idx
-      ON resource_categories ((lower(name)))
+      ALTER TABLE resource_categories
+      ADD COLUMN IF NOT EXISTS owner_user_id UUID
     `;
 
     await sql`
@@ -89,17 +96,8 @@ export async function ensureSchema() {
     `;
 
     await sql`
-      INSERT INTO resource_categories (name)
-      VALUES ('General')
-      ON CONFLICT DO NOTHING
-    `;
-
-    await sql`
-      INSERT INTO resource_categories (name)
-      SELECT DISTINCT trim(category)
-      FROM resource_cards
-      WHERE trim(category) <> ''
-      ON CONFLICT DO NOTHING
+      CREATE INDEX IF NOT EXISTS resource_categories_owner_user_id_idx
+      ON resource_categories (owner_user_id)
     `;
 
     await sql`
@@ -162,6 +160,11 @@ export async function ensureSchema() {
     `;
 
     await sql`
+      CREATE INDEX IF NOT EXISTS resource_cards_owner_user_id_idx
+      ON resource_cards (owner_user_id)
+    `;
+
+    await sql`
       CREATE INDEX IF NOT EXISTS resource_links_resource_id_position_idx
       ON resource_links (resource_id, position)
     `;
@@ -171,6 +174,7 @@ export async function ensureSchema() {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email TEXT NOT NULL CHECK (char_length(email) <= 320),
         password_hash TEXT,
+        role TEXT NOT NULL DEFAULT 'editor',
         is_admin BOOLEAN NOT NULL DEFAULT FALSE,
         is_first_admin BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -185,6 +189,59 @@ export async function ensureSchema() {
     await sql`
       ALTER TABLE app_users
       ADD COLUMN IF NOT EXISTS is_first_admin BOOLEAN NOT NULL DEFAULT FALSE
+    `;
+
+    await sql`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'editor'
+    `;
+
+    await sql`
+      UPDATE app_users
+      SET role = CASE
+        WHEN is_first_admin = true THEN 'first_admin'
+        WHEN is_admin = true THEN 'admin'
+        WHEN role IS NULL OR role = '' THEN 'editor'
+        ELSE role
+      END
+      WHERE role IS DISTINCT FROM CASE
+        WHEN is_first_admin = true THEN 'first_admin'
+        WHEN is_admin = true THEN 'admin'
+        WHEN role IS NULL OR role = '' THEN 'editor'
+        ELSE role
+      END
+    `;
+
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'app_users_role_check'
+        ) THEN
+          ALTER TABLE app_users
+          ADD CONSTRAINT app_users_role_check
+          CHECK (role IN ('viewer', 'editor', 'admin', 'first_admin'));
+        END IF;
+      END $$;
+    `;
+
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'resource_categories_owner_user_id_app_users_id_fk'
+        ) THEN
+          ALTER TABLE resource_categories
+          ADD CONSTRAINT resource_categories_owner_user_id_app_users_id_fk
+          FOREIGN KEY (owner_user_id)
+          REFERENCES app_users(id)
+          ON DELETE SET NULL;
+        END IF;
+      END $$;
     `;
 
     await sql`
@@ -206,6 +263,192 @@ export async function ensureSchema() {
       CREATE UNIQUE INDEX IF NOT EXISTS app_users_single_first_admin_idx
       ON app_users (is_first_admin)
       WHERE is_first_admin = true
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS resource_workspaces (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name TEXT NOT NULL CHECK (char_length(name) <= 80),
+        owner_user_id UUID REFERENCES app_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS resource_workspaces_owner_name_lower_idx
+      ON resource_workspaces (
+        (coalesce(owner_user_id, '00000000-0000-0000-0000-000000000000'::uuid)),
+        (lower(name))
+      )
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS resource_workspaces_created_at_idx
+      ON resource_workspaces (created_at DESC)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS resource_workspaces_owner_user_id_idx
+      ON resource_workspaces (owner_user_id)
+    `;
+
+    await sql`
+      INSERT INTO resource_workspaces (name, owner_user_id)
+      VALUES ('Main Workspace', NULL)
+      ON CONFLICT (
+        (coalesce(owner_user_id, '00000000-0000-0000-0000-000000000000'::uuid)),
+        (lower(name))
+      ) DO NOTHING
+    `;
+
+    await sql`
+      ALTER TABLE resource_categories
+      ADD COLUMN IF NOT EXISTS workspace_id UUID
+    `;
+
+    await sql`
+      ALTER TABLE resource_cards
+      ADD COLUMN IF NOT EXISTS workspace_id UUID
+    `;
+
+    await sql`
+      UPDATE resource_categories
+      SET workspace_id = main_workspace.id
+      FROM (
+        SELECT id
+        FROM resource_workspaces
+        WHERE owner_user_id IS NULL
+          AND lower(name) = lower('Main Workspace')
+        ORDER BY created_at ASC
+        LIMIT 1
+      ) AS main_workspace
+      WHERE resource_categories.workspace_id IS NULL
+    `;
+
+    await sql`
+      UPDATE resource_cards
+      SET
+        workspace_id = COALESCE(assigned.workspace_id, main_workspace.id),
+        updated_at = NOW()
+      FROM (
+        SELECT id
+        FROM resource_workspaces
+        WHERE owner_user_id IS NULL
+          AND lower(name) = lower('Main Workspace')
+        ORDER BY created_at ASC
+        LIMIT 1
+      ) AS main_workspace
+      LEFT JOIN resource_categories AS assigned
+        ON lower(assigned.name) = lower(resource_cards.category)
+      WHERE resource_cards.workspace_id IS NULL
+    `;
+
+    await sql`
+      ALTER TABLE resource_categories
+      ALTER COLUMN workspace_id SET NOT NULL
+    `;
+
+    await sql`
+      ALTER TABLE resource_cards
+      ALTER COLUMN workspace_id SET NOT NULL
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS resource_categories_workspace_id_idx
+      ON resource_categories (workspace_id)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS resource_cards_workspace_id_idx
+      ON resource_cards (workspace_id)
+    `;
+
+    await sql`
+      DROP INDEX IF EXISTS resource_categories_name_lower_idx
+    `;
+
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS resource_categories_workspace_name_lower_idx
+      ON resource_categories (workspace_id, (lower(name)))
+    `;
+
+    await sql`
+      INSERT INTO resource_categories (name, workspace_id)
+      SELECT
+        'General',
+        workspace.id
+      FROM (
+        SELECT id
+        FROM resource_workspaces
+        WHERE owner_user_id IS NULL
+          AND lower(name) = lower('Main Workspace')
+        ORDER BY created_at ASC
+        LIMIT 1
+      ) AS workspace
+      ON CONFLICT (workspace_id, lower(name)) DO NOTHING
+    `;
+
+    await sql`
+      INSERT INTO resource_categories (name, workspace_id, owner_user_id)
+      SELECT DISTINCT
+        trim(cards.category),
+        cards.workspace_id,
+        cards.owner_user_id
+      FROM resource_cards AS cards
+      WHERE trim(cards.category) <> ''
+      ON CONFLICT (workspace_id, lower(name)) DO NOTHING
+    `;
+
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'resource_categories_workspace_id_resource_workspaces_id_fk'
+        ) THEN
+          ALTER TABLE resource_categories
+          ADD CONSTRAINT resource_categories_workspace_id_resource_workspaces_id_fk
+          FOREIGN KEY (workspace_id)
+          REFERENCES resource_workspaces(id)
+          ON DELETE CASCADE;
+        END IF;
+      END $$;
+    `;
+
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'resource_cards_workspace_id_resource_workspaces_id_fk'
+        ) THEN
+          ALTER TABLE resource_cards
+          ADD CONSTRAINT resource_cards_workspace_id_resource_workspaces_id_fk
+          FOREIGN KEY (workspace_id)
+          REFERENCES resource_workspaces(id)
+          ON DELETE CASCADE;
+        END IF;
+      END $$;
+    `;
+
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'resource_cards_owner_user_id_app_users_id_fk'
+        ) THEN
+          ALTER TABLE resource_cards
+          ADD CONSTRAINT resource_cards_owner_user_id_app_users_id_fk
+          FOREIGN KEY (owner_user_id)
+          REFERENCES app_users(id)
+          ON DELETE SET NULL;
+        END IF;
+      END $$;
     `;
 
     await sql`

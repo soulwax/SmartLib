@@ -38,7 +38,9 @@ export async function DELETE(_request: Request, context: RouteContext) {
     }
 
     const categoryId = await parseCategoryId(context)
-    const result = await deleteResourceCategoryService(categoryId)
+    const result = await deleteResourceCategoryService(categoryId, {
+      actorUserId: session.user.id,
+    })
     return NextResponse.json(result)
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -88,7 +90,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     const input = updateCategorySchema.parse(payload)
     const { mode, category } = await updateResourceCategorySymbolService(
       categoryId,
-      input.symbol ?? null
+      input.symbol ?? null,
+      { actorUserId: session.user.id }
     )
 
     return NextResponse.json({ mode, category })

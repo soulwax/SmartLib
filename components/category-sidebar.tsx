@@ -61,6 +61,7 @@ interface CategorySidebarProps {
   resourceCounts: Record<string, number>;
   categorySymbols?: Record<string, string | undefined>;
   canManageCategories?: boolean;
+  canPasteIntoCategory?: boolean;
   onCreateCategory?: () => void;
   onEditCategorySymbol?: (category: string) => void;
   onDeleteCategory?: (category: string) => void;
@@ -92,6 +93,7 @@ export function CategorySidebar({
   resourceCounts,
   categorySymbols = {},
   canManageCategories = false,
+  canPasteIntoCategory = false,
   onCreateCategory,
   onEditCategorySymbol,
   onDeleteCategory,
@@ -119,9 +121,12 @@ export function CategorySidebar({
   return (
     <ScrollArea className="h-full">
       <div className="flex flex-col gap-1 p-4">
-        <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Categories
-        </p>
+        <div className="mb-3 px-1">
+          <p className="section-title-pill">
+            <Layers className="h-3.5 w-3.5 text-primary" />
+            Categories
+          </p>
+        </div>
         {categoryItems.map((cat) => {
           const Icon = resolveCategoryIcon(cat);
           const isActive = activeCategory === cat;
@@ -212,35 +217,41 @@ export function CategorySidebar({
                   Copy category name
                 </ContextMenuItem>
 
-                {canManageCategories ? (
+                {canPasteIntoCategory || canManageCategories ? (
                   <>
                     <ContextMenuSeparator />
-                    <ContextMenuItem
-                      onSelect={() => onPasteIntoCategory?.(cat)}
-                    >
-                      <ClipboardPaste className="mr-2 h-4 w-4" />
-                      Paste URL into category
-                    </ContextMenuItem>
-                    <ContextMenuItem onSelect={() => onCreateCategory?.()}>
-                      <FolderPlus className="mr-2 h-4 w-4" />
-                      Create category
-                    </ContextMenuItem>
-                    {cat !== "All" ? (
+                    {canPasteIntoCategory ? (
                       <ContextMenuItem
-                        onSelect={() => onEditCategorySymbol?.(cat)}
+                        onSelect={() => onPasteIntoCategory?.(cat)}
                       >
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit symbol
+                        <ClipboardPaste className="mr-2 h-4 w-4" />
+                        Paste URL into category
                       </ContextMenuItem>
                     ) : null}
-                    {cat !== "All" ? (
-                      <ContextMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onSelect={() => onDeleteCategory?.(cat)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete category
-                      </ContextMenuItem>
+                    {canManageCategories ? (
+                      <>
+                        <ContextMenuItem onSelect={() => onCreateCategory?.()}>
+                          <FolderPlus className="mr-2 h-4 w-4" />
+                          Create category
+                        </ContextMenuItem>
+                        {cat !== "All" ? (
+                          <ContextMenuItem
+                            onSelect={() => onEditCategorySymbol?.(cat)}
+                          >
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit symbol
+                          </ContextMenuItem>
+                        ) : null}
+                        {cat !== "All" ? (
+                          <ContextMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onSelect={() => onDeleteCategory?.(cat)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete category
+                          </ContextMenuItem>
+                        ) : null}
+                      </>
                     ) : null}
                   </>
                 ) : null}

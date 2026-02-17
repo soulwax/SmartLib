@@ -3,6 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials"
 import GitHubProvider from "next-auth/providers/github"
 import { z } from "zod"
 
+import { deriveUserRole } from "@/lib/authorization"
 import {
   EmailNotVerifiedError,
   ensureAuthUserForSignIn,
@@ -74,6 +75,7 @@ export const authOptions: NextAuthOptions = {
           return {
             id: user.id,
             email: user.email,
+            role: user.role,
             isAdmin: user.isAdmin,
             isFirstAdmin: user.isFirstAdmin,
           }
@@ -98,6 +100,7 @@ export const authOptions: NextAuthOptions = {
           return {
             id: syncedUser.id,
             email: syncedUser.email,
+            role: syncedUser.role,
             isAdmin: syncedUser.isAdmin,
             isFirstAdmin: syncedUser.isFirstAdmin,
           }
@@ -128,6 +131,7 @@ export const authOptions: NextAuthOptions = {
       })
       user.id = syncedUser.id
       user.email = syncedUser.email
+      user.role = syncedUser.role
       user.isAdmin = syncedUser.isAdmin
       user.isFirstAdmin = syncedUser.isFirstAdmin
 
@@ -146,6 +150,10 @@ export const authOptions: NextAuthOptions = {
         token.isFirstAdmin = user.isFirstAdmin
       }
 
+      if (typeof user?.role === "string") {
+        token.role = user.role
+      }
+
       if (!token.userId && typeof token.sub === "string") {
         token.userId = token.sub
       }
@@ -155,6 +163,7 @@ export const authOptions: NextAuthOptions = {
 
         if (authUser) {
           token.userId = authUser.id
+          token.role = authUser.role
           token.isAdmin = authUser.isAdmin
           token.isFirstAdmin = authUser.isFirstAdmin
           token.email = authUser.email
@@ -171,6 +180,11 @@ export const authOptions: NextAuthOptions = {
           session.user.id = token.sub
         }
 
+        session.user.role = deriveUserRole({
+          role: typeof token.role === "string" ? token.role : null,
+          isAdmin: token.isAdmin === true,
+          isFirstAdmin: token.isFirstAdmin === true,
+        })
         session.user.isAdmin = token.isAdmin === true
         session.user.isFirstAdmin = token.isFirstAdmin === true
       }

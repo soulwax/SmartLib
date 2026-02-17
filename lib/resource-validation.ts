@@ -9,6 +9,7 @@ const resourceLinkSchema = z.object({
 })
 
 const resourceInputSchema = z.object({
+  workspaceId: z.string().uuid().optional(),
   category: z.string().trim().min(1).max(80),
   tags: z.array(z.string().trim().min(1).max(40)).max(24).optional(),
   links: z.array(resourceLinkSchema).min(1).max(100),
@@ -81,6 +82,7 @@ export function parseResourceInput(payload: unknown): ResourceInput {
   }
 
   return {
+    workspaceId: parsed.workspaceId,
     category: normalizeWhitespace(parsed.category),
     tags: normalizedTags,
     links: parsed.links.map(normalizeLink),

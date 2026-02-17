@@ -2,7 +2,11 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
-import { ResourceNotFoundError } from "@/lib/resource-repository"
+import { canCreateResources, deriveUserRole } from "@/lib/authorization"
+import {
+  ResourceNotFoundError,
+  ResourceWorkspaceNotFoundError,
+} from "@/lib/resource-repository"
 import {
   createResourceService,
   listResourcesService,
@@ -30,6 +34,10 @@ function handleRouteError(error: unknown) {
     return errorResponse(error.message, 404)
   }
 
+  if (error instanceof ResourceWorkspaceNotFoundError) {
+    return errorResponse(error.message, 404)
+  }
+
   return errorResponse("Unexpected server error.", 500)
 }
 
@@ -49,7 +57,10 @@ async function readRequestJson(request: Request): Promise<unknown> {
 
 export async function GET() {
   try {
-    const { mode, resources } = await listResourcesService()
+    const session = await auth()
+    const { mode, resources } = await listResourcesService({
+      userId: session?.user?.id ?? null,
+    })
     return NextResponse.json({ mode, resources })
   } catch (error) {
     return handleRouteError(error)
@@ -62,13 +73,21 @@ export async function POST(request: Request) {
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
     }
-    if (!session.user.isAdmin) {
-      return errorResponse("Admin access required.", 403)
+
+    const role = deriveUserRole({
+      role: session.user.role,
+      isAdmin: session.user.isAdmin,
+      isFirstAdmin: session.user.isFirstAdmin,
+    })
+    if (!canCreateResources(role)) {
+      return errorResponse("Insufficient permissions for creating resources.", 403)
     }
 
     const payload = await readRequestJson(request)
     const input = parseResourceInput(payload)
-    const { mode, resource } = await createResourceService(input)
+    const { mode, resource } = await createResourceService(input, {
+      ownerUserId: session.user.id,
+    })
 
     return NextResponse.json({ mode, resource }, { status: 201 })
   } catch (error) {

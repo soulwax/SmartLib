@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { getOptionalPerplexityEnv } from "@/lib/env";
+import { canCreateResources, deriveUserRole } from "@/lib/authorization";
 
 export const runtime = "nodejs";
 
@@ -344,8 +345,13 @@ export async function POST(request: Request) {
       return errorResponse("Authentication required.", 401);
     }
 
-    if (!session.user.isAdmin) {
-      return errorResponse("Admin access required.", 403);
+    const role = deriveUserRole({
+      role: session.user.role,
+      isAdmin: session.user.isAdmin,
+      isFirstAdmin: session.user.isFirstAdmin,
+    });
+    if (!canCreateResources(role)) {
+      return errorResponse("Insufficient permissions for AI paste.", 403);
     }
 
     const payload = await readRequestJson(request);

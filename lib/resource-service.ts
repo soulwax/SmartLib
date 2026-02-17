@@ -1,10 +1,11 @@
 import "server-only"
 
-import { ensureSuperAdminSeeded } from "@/lib/auth-service"
+import { ensureSuperAdminSeeded, findFirstAdminAuthUser } from "@/lib/auth-service"
 import { hasDatabaseEnv } from "@/lib/env"
 import { loadLibraryResourcesFromFile } from "@/lib/library-parser"
 import {
   createMockResourceCategory,
+  createMockResourceWorkspace,
   createMockResource,
   deleteMockResourceCategory,
   deleteMockResource,
@@ -12,6 +13,7 @@ import {
   listMockResourceCategories,
   listMockResourceAuditLogs,
   listMockResourcesIncludingDeleted,
+  listMockResourceWorkspaces,
   listMockResources,
   updateMockResourceCategorySymbol,
   restoreMockResource,
@@ -19,13 +21,16 @@ import {
 } from "@/lib/mock-resource-store"
 import {
   createResourceCategory as createDbResourceCategory,
+  createResourceWorkspace as createDbResourceWorkspace,
   createResource as createDbResource,
+  backfillResourceOwnershipToFirstAdmin as backfillDbResourceOwnershipToFirstAdmin,
   deleteResourceCategory as deleteDbResourceCategory,
   deleteResource as deleteDbResource,
   hasAnyResources as hasAnyDbResources,
   listResourceCategories as listDbResourceCategories,
   listResourceAuditLogs as listDbResourceAuditLogs,
   listResourcesIncludingDeleted as listDbResourcesIncludingDeleted,
+  listResourceWorkspaces as listDbResourceWorkspaces,
   listResources as listDbResources,
   updateResourceCategorySymbol as updateDbResourceCategorySymbol,
   restoreResource as restoreDbResource,
@@ -37,6 +42,7 @@ import type {
   ResourceCard,
   ResourceCategory,
   ResourceInput,
+  ResourceWorkspace,
 } from "@/lib/resources"
 
 export type ResourceDataMode = "database" | "mock"
@@ -67,6 +73,12 @@ async function ensureDatabaseBootstrapped() {
 
   databaseBootstrap = (async () => {
     await ensureSuperAdminSeeded()
+    const { user: firstAdminUser } = await findFirstAdminAuthUser()
+    const firstAdminUserId = firstAdminUser?.id ?? null
+
+    if (firstAdminUserId) {
+      await backfillDbResourceOwnershipToFirstAdmin(firstAdminUserId)
+    }
 
     const hasExistingResources = await hasAnyDbResources()
     if (hasExistingResources) {
@@ -79,7 +91,13 @@ async function ensureDatabaseBootstrapped() {
     }
 
     for (const resource of libraryResources) {
-      await createDbResource(toResourceInput(resource))
+      await createDbResource(toResourceInput(resource), {
+        ownerUserId: firstAdminUserId,
+      })
+    }
+
+    if (firstAdminUserId) {
+      await backfillDbResourceOwnershipToFirstAdmin(firstAdminUserId)
     }
   })()
 
@@ -91,7 +109,48 @@ async function ensureDatabaseBootstrapped() {
   }
 }
 
-export async function listResourcesService(): Promise<{
+export async function listResourceWorkspacesService(options?: {
+  userId?: string | null
+}): Promise<{ mode: ResourceDataMode; workspaces: ResourceWorkspace[] }> {
+  const mode = currentMode()
+
+  if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
+    return {
+      mode,
+      workspaces: await listDbResourceWorkspaces({ userId: options?.userId }),
+    }
+  }
+
+  return {
+    mode,
+    workspaces: await listMockResourceWorkspaces({ userId: options?.userId }),
+  }
+}
+
+export async function createResourceWorkspaceService(
+  name: string,
+  options: { ownerUserId: string }
+): Promise<{ mode: ResourceDataMode; workspace: ResourceWorkspace }> {
+  const mode = currentMode()
+
+  if (mode === "database") {
+    return {
+      mode,
+      workspace: await createDbResourceWorkspace(name, options.ownerUserId),
+    }
+  }
+
+  return {
+    mode,
+    workspace: await createMockResourceWorkspace(name, options.ownerUserId),
+  }
+}
+
+export async function listResourcesService(options?: {
+  userId?: string | null
+}): Promise<{
   mode: ResourceDataMode
   resources: ResourceCard[]
 }> {
@@ -102,17 +161,20 @@ export async function listResourcesService(): Promise<{
 
     return {
       mode,
-      resources: await listDbResources(),
+      resources: await listDbResources({ userId: options?.userId }),
     }
   }
 
   return {
     mode,
-    resources: await listMockResources(),
+    resources: await listMockResources({ userId: options?.userId }),
   }
 }
 
-export async function listResourceCategoriesService(): Promise<{
+export async function listResourceCategoriesService(options?: {
+  userId?: string | null
+  workspaceId?: string | null
+}): Promise<{
   mode: ResourceDataMode
   categories: ResourceCategory[]
 }> {
@@ -123,56 +185,69 @@ export async function listResourceCategoriesService(): Promise<{
 
     return {
       mode,
-      categories: await listDbResourceCategories(),
+      categories: await listDbResourceCategories({
+        userId: options?.userId,
+        workspaceId: options?.workspaceId,
+      }),
     }
   }
 
   return {
     mode,
-    categories: await listMockResourceCategories(),
+    categories: await listMockResourceCategories({
+      userId: options?.userId,
+      workspaceId: options?.workspaceId,
+    }),
   }
 }
 
 export async function createResourceCategoryService(
   name: string,
-  symbol?: string | null
+  symbol?: string | null,
+  options?: { workspaceId?: string; ownerUserId?: string | null }
 ): Promise<{ mode: ResourceDataMode; category: ResourceCategory }> {
   const mode = currentMode()
 
   if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
     return {
       mode,
-      category: await createDbResourceCategory(name, symbol),
+      category: await createDbResourceCategory(name, symbol, options),
     }
   }
 
   return {
     mode,
-    category: await createMockResourceCategory(name, symbol),
+    category: await createMockResourceCategory(name, symbol, options),
   }
 }
 
 export async function updateResourceCategorySymbolService(
   id: string,
-  symbol: string | null
+  symbol: string | null,
+  options?: { actorUserId?: string | null }
 ): Promise<{ mode: ResourceDataMode; category: ResourceCategory }> {
   const mode = currentMode()
 
   if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
     return {
       mode,
-      category: await updateDbResourceCategorySymbol(id, symbol),
+      category: await updateDbResourceCategorySymbol(id, symbol, options),
     }
   }
 
   return {
     mode,
-    category: await updateMockResourceCategorySymbol(id, symbol),
+    category: await updateMockResourceCategorySymbol(id, symbol, options),
   }
 }
 
 export async function deleteResourceCategoryService(
-  id: string
+  id: string,
+  options?: { actorUserId?: string | null }
 ): Promise<{
   mode: ResourceDataMode
   deletedCategory: ResourceCategory
@@ -182,29 +257,38 @@ export async function deleteResourceCategoryService(
   const mode = currentMode()
 
   if (mode === "database") {
-    const result = await deleteDbResourceCategory(id)
+    await ensureDatabaseBootstrapped()
+
+    const result = await deleteDbResourceCategory(id, options)
     return { mode, ...result }
   }
 
-  const result = await deleteMockResourceCategory(id)
+  const result = await deleteMockResourceCategory(id, options)
   return { mode, ...result }
 }
 
 export async function createResourceService(
-  input: ResourceInput
+  input: ResourceInput,
+  options?: { ownerUserId?: string | null }
 ): Promise<{ mode: ResourceDataMode; resource: ResourceCard }> {
   const mode = currentMode()
 
   if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
     return {
       mode,
-      resource: await createDbResource(input),
+      resource: await createDbResource(input, {
+        ownerUserId: options?.ownerUserId ?? null,
+      }),
     }
   }
 
   return {
     mode,
-    resource: await createMockResource(input),
+    resource: await createMockResource(input, {
+      ownerUserId: options?.ownerUserId ?? null,
+    }),
   }
 }
 
@@ -236,20 +320,27 @@ export async function listResourcesIncludingDeletedService(): Promise<{
 
 export async function updateResourceService(
   id: string,
-  input: ResourceInput
+  input: ResourceInput,
+  options?: { ownerUserId?: string | null }
 ): Promise<{ mode: ResourceDataMode; resource: ResourceCard }> {
   const mode = currentMode()
 
   if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
     return {
       mode,
-      resource: await updateDbResource(id, input),
+      resource: await updateDbResource(id, input, {
+        ownerUserId: options?.ownerUserId ?? null,
+      }),
     }
   }
 
   return {
     mode,
-    resource: await updateMockResource(id, input),
+    resource: await updateMockResource(id, input, {
+      ownerUserId: options?.ownerUserId ?? null,
+    }),
   }
 }
 
@@ -260,6 +351,8 @@ export async function deleteResourceService(
   const mode = currentMode()
 
   if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
     await deleteDbResource(id, actor)
     return { mode }
   }
@@ -275,6 +368,8 @@ export async function restoreResourceService(
   const mode = currentMode()
 
   if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
     return {
       mode,
       resource: await restoreDbResource(id, actor),

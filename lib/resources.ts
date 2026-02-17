@@ -8,7 +8,9 @@ export interface ResourceLink {
 
 export interface ResourceCard {
   id: string
+  workspaceId: string
   category: string
+  ownerUserId: string | null
   tags: string[]
   links: ResourceLink[]
   deletedAt?: string | null
@@ -16,8 +18,18 @@ export interface ResourceCard {
 
 export interface ResourceCategory {
   id: string
+  workspaceId: string
   name: string
   symbol?: string | null
+  ownerUserId?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface ResourceWorkspace {
+  id: string
+  name: string
+  ownerUserId?: string | null
   createdAt?: string
   updatedAt?: string
 }
@@ -46,6 +58,7 @@ export interface ResourceLinkInput {
 }
 
 export interface ResourceInput {
+  workspaceId?: string
   category: string
   tags: string[]
   links: ResourceLinkInput[]

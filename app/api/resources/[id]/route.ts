@@ -2,7 +2,12 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
-import { ResourceNotFoundError } from "@/lib/resource-repository"
+import { canManageResource, deriveUserRole } from "@/lib/authorization"
+import {
+  getResourceOwnerById,
+  ResourceNotFoundError,
+  ResourceWorkspaceNotFoundError,
+} from "@/lib/resource-repository"
 import {
   deleteResourceService,
   updateResourceService,
@@ -32,6 +37,10 @@ function handleRouteError(error: unknown) {
   }
 
   if (error instanceof ResourceNotFoundError) {
+    return errorResponse(error.message, 404)
+  }
+
+  if (error instanceof ResourceWorkspaceNotFoundError) {
     return errorResponse(error.message, 404)
   }
 
@@ -70,14 +79,27 @@ export async function PUT(request: Request, context: RouteContext) {
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
     }
-    if (!session.user.isAdmin) {
-      return errorResponse("Admin access required.", 403)
-    }
 
     const resourceId = await parseResourceId(context)
+    const existing = await getResourceOwnerById(resourceId)
+    if (!existing) {
+      return errorResponse(`Resource ${resourceId} was not found.`, 404)
+    }
+
+    const role = deriveUserRole({
+      role: session.user.role,
+      isAdmin: session.user.isAdmin,
+      isFirstAdmin: session.user.isFirstAdmin,
+    })
+    if (!canManageResource(role, session.user.id, existing.ownerUserId)) {
+      return errorResponse("You do not have access to edit this resource.", 403)
+    }
+
     const payload = await readRequestJson(request)
     const input = parseResourceInput(payload)
-    const { mode, resource } = await updateResourceService(resourceId, input)
+    const { mode, resource } = await updateResourceService(resourceId, input, {
+      ownerUserId: session.user.id,
+    })
 
     return NextResponse.json({ mode, resource })
   } catch (error) {
@@ -91,11 +113,22 @@ export async function DELETE(_request: Request, context: RouteContext) {
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
     }
-    if (!session.user.isAdmin) {
-      return errorResponse("Admin access required.", 403)
-    }
 
     const resourceId = await parseResourceId(context)
+    const existing = await getResourceOwnerById(resourceId)
+    if (!existing) {
+      return errorResponse(`Resource ${resourceId} was not found.`, 404)
+    }
+
+    const role = deriveUserRole({
+      role: session.user.role,
+      isAdmin: session.user.isAdmin,
+      isFirstAdmin: session.user.isFirstAdmin,
+    })
+    if (!canManageResource(role, session.user.id, existing.ownerUserId)) {
+      return errorResponse("You do not have access to archive this resource.", 403)
+    }
+
     const { mode } = await deleteResourceService(
       resourceId,
       auditActorFromSession(session)

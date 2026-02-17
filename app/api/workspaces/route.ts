@@ -2,21 +2,16 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
+import { ResourceWorkspaceAlreadyExistsError } from "@/lib/resource-repository"
 import {
-  ResourceCategoryAlreadyExistsError,
-  ResourceWorkspaceNotFoundError,
-} from "@/lib/resource-repository"
-import {
-  createResourceCategoryService,
-  listResourceCategoriesService,
+  createResourceWorkspaceService,
+  listResourceWorkspacesService,
 } from "@/lib/resource-service"
 
 export const runtime = "nodejs"
 
-const createCategorySchema = z.object({
-  workspaceId: z.string().uuid().optional(),
+const createWorkspaceSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  symbol: z.string().trim().max(16).optional().nullable(),
 })
 
 function errorResponse(message: string, status: number) {
@@ -40,10 +35,11 @@ async function readRequestJson(request: Request): Promise<unknown> {
 export async function GET() {
   try {
     const session = await auth()
-    const { mode, categories } = await listResourceCategoriesService({
+    const { mode, workspaces } = await listResourceWorkspacesService({
       userId: session?.user?.id ?? null,
     })
-    return NextResponse.json({ mode, categories })
+
+    return NextResponse.json({ mode, workspaces })
   } catch {
     return errorResponse("Unexpected server error.", 500)
   }
@@ -55,39 +51,28 @@ export async function POST(request: Request) {
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
     }
-    if (!session.user.isAdmin) {
-      return errorResponse("Admin access required.", 403)
-    }
 
     const payload = await readRequestJson(request)
-    const input = createCategorySchema.parse(payload)
-    const { mode, category } = await createResourceCategoryService(
+    const input = createWorkspaceSchema.parse(payload)
+    const { mode, workspace } = await createResourceWorkspaceService(
       input.name,
-      input.symbol ?? null,
-      {
-        workspaceId: input.workspaceId,
-        ownerUserId: session.user.id,
-      }
+      { ownerUserId: session.user.id }
     )
 
-    return NextResponse.json({ mode, category }, { status: 201 })
+    return NextResponse.json({ mode, workspace }, { status: 201 })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {
-          error: "Invalid category payload.",
+          error: "Invalid workspace payload.",
           details: error.flatten(),
         },
         { status: 400 }
       )
     }
 
-    if (error instanceof ResourceCategoryAlreadyExistsError) {
+    if (error instanceof ResourceWorkspaceAlreadyExistsError) {
       return errorResponse(error.message, 409)
-    }
-
-    if (error instanceof ResourceWorkspaceNotFoundError) {
-      return errorResponse(error.message, 404)
     }
 
     return errorResponse("Unexpected server error.", 500)

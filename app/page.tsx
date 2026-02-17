@@ -1,18 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { signIn, signOut, useSession } from "next-auth/react";
 
+import {
+  canCreateResources,
+  canManageResource as canManageResourceByRole,
+  deriveUserRole,
+  hasAdminAccess,
+} from "@/lib/authorization";
 import type {
   ResourceCard,
   ResourceCategory,
   ResourceInput,
+  ResourceWorkspace,
 } from "@/lib/resources";
 import { AddResourceModal } from "@/components/add-resource-modal";
 import { CategorySidebar } from "@/components/category-sidebar";
 import { useColorScheme } from "@/components/color-scheme-provider";
 import { ResourceCardItem } from "@/components/resource-card";
+import { WorkspaceRail } from "@/components/workspace-rail";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -98,9 +106,19 @@ interface ListCategoriesResponse extends ApiErrorResponse {
   categories?: ResourceCategory[];
 }
 
+interface ListWorkspacesResponse extends ApiErrorResponse {
+  mode?: "database" | "mock";
+  workspaces?: ResourceWorkspace[];
+}
+
 interface CategoryResponse extends ApiErrorResponse {
   mode?: "database" | "mock";
   category?: ResourceCategory;
+}
+
+interface WorkspaceResponse extends ApiErrorResponse {
+  mode?: "database" | "mock";
+  workspace?: ResourceWorkspace;
 }
 
 interface DeleteCategoryResponse extends ApiErrorResponse {
@@ -135,8 +153,13 @@ interface LinkMetadataResponse extends ApiErrorResponse {
 
 type AuthMode = "login" | "register";
 type PasteHoverTarget =
-  | { type: "card"; resourceId: string; category: string }
-  | { type: "category"; category: string | "All" };
+  | {
+      type: "card";
+      resourceId: string;
+      category: string;
+      workspaceId: string;
+    }
+  | { type: "category"; category: string | "All"; workspaceId: string };
 
 async function readJson<T>(response: Response): Promise<T | null> {
   try {
@@ -191,20 +214,53 @@ function mergeTags(existingTags: string[], nextTags: string[]): string[] {
   return merged;
 }
 
-const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 240;
-const DESKTOP_SIDEBAR_MIN_WIDTH = 196;
-const DESKTOP_SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar-width";
+const ACTIVE_WORKSPACE_STORAGE_KEY = "active-workspace-id";
+const MOBILE_STACK_BREAKPOINT = 768;
+const SIDEBAR_SNAP_GRID = 8;
+const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 304;
+const DESKTOP_SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_KEYBOARD_STEP = SIDEBAR_SNAP_GRID;
+const FALLBACK_VIEWPORT_WIDTH = 1440;
 
-function clampDesktopSidebarWidth(width: number): number {
+function snapSidebarWidth(width: number): number {
+  return Math.round(width / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID;
+}
+
+function getDesktopSidebarMaxWidth(viewportWidth: number): number {
+  return Math.max(
+    DESKTOP_SIDEBAR_MIN_WIDTH,
+    Math.floor(viewportWidth * 0.5 / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID,
+  );
+}
+
+function getViewportWidth(): number {
+  if (typeof window === "undefined") {
+    return FALLBACK_VIEWPORT_WIDTH;
+  }
+
+  return window.innerWidth;
+}
+
+function clampDesktopSidebarWidth(
+  width: number,
+  viewportWidth = getViewportWidth(),
+): number {
+  const maxWidth = getDesktopSidebarMaxWidth(viewportWidth);
+
   return Math.min(
-    DESKTOP_SIDEBAR_MAX_WIDTH,
-    Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, width),
+    maxWidth,
+    Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, snapSidebarWidth(width)),
   );
 }
 
 export default function Page() {
   const { data: session, status: sessionStatus } = useSession();
   const [resources, setResources] = useState<ResourceCard[]>([]);
+  const [workspaces, setWorkspaces] = useState<ResourceWorkspace[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
+    null,
+  );
   const [categoryRecords, setCategoryRecords] = useState<ResourceCategory[]>(
     [],
   );
@@ -213,9 +269,12 @@ export default function Page() {
   const [modalOpen, setModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [desktopSidebarWidth, setDesktopSidebarWidth] = useState<number>(
-    DESKTOP_SIDEBAR_DEFAULT_WIDTH,
+    clampDesktopSidebarWidth(DESKTOP_SIDEBAR_DEFAULT_WIDTH),
   );
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
+  const hasLoadedSidebarWidthRef = useRef(false);
+  const resizeRafIdRef = useRef<number | null>(null);
+  const pendingSidebarWidthRef = useRef<number | null>(null);
   const [editingResource, setEditingResource] = useState<ResourceCard | null>(
     null,
   );
@@ -234,6 +293,10 @@ export default function Page() {
   const [isResendingVerification, setIsResendingVerification] = useState(false);
   const [createCategoryDialogOpen, setCreateCategoryDialogOpen] =
     useState(false);
+  const [createWorkspaceDialogOpen, setCreateWorkspaceDialogOpen] =
+    useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [isWorkspaceMutating, setIsWorkspaceMutating] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategorySymbol, setNewCategorySymbol] = useState("");
   const [isCategoryMutating, setIsCategoryMutating] = useState(false);
@@ -254,30 +317,128 @@ export default function Page() {
   const isAuthenticated = Boolean(session?.user?.id);
   const isAdmin = Boolean(session?.user?.isAdmin);
   const isFirstAdmin = Boolean(session?.user?.isFirstAdmin);
-  const roleLabel = isFirstAdmin ? "FirstAdmin" : isAdmin ? "Admin" : "Viewer";
-  const canManageResources = isAdmin;
+  const userRole = deriveUserRole({
+    role: session?.user?.role ?? null,
+    isAdmin,
+    isFirstAdmin,
+  });
+  const roleLabel =
+    userRole === "first_admin"
+      ? "FirstAdmin"
+      : userRole === "admin"
+        ? "Admin"
+        : userRole === "editor"
+          ? "Editor"
+          : "Viewer";
+  const canCreateWorkspaces = isAuthenticated;
+  const canManageResources = isAuthenticated && canCreateResources(userRole);
+  const canManageCategories = hasAdminAccess(userRole);
   const canSubmitAuth = authEmail.trim().length > 0 && authPassword.length > 0;
   const canSubmitPromote =
     promoteIdentifier.trim().length > 0 && !isPromotingAdmin;
+  const canSubmitWorkspace =
+    canCreateWorkspaces &&
+    newWorkspaceName.trim().length > 0 &&
+    !isWorkspaceMutating;
   const canSubmitCategory =
     newCategoryName.trim().length > 0 &&
     !isCategoryMutating &&
-    canManageResources;
+    canManageCategories &&
+    Boolean(activeWorkspaceId);
+  const desktopSidebarMaxWidth = getDesktopSidebarMaxWidth(getViewportWidth());
+  const sessionUserId = session?.user?.id ?? null;
+
+  const canManageResourceCard = useCallback(
+    (resource: ResourceCard | null | undefined) => {
+      if (!resource) {
+        return false;
+      }
+
+      return canManageResourceByRole(
+        userRole,
+        sessionUserId,
+        resource.ownerUserId ?? null,
+      );
+    },
+    [sessionUserId, userRole],
+  );
+
+  const isDesktopSidebarEnabled = useCallback(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return window.innerWidth >= MOBILE_STACK_BREAKPOINT;
+  }, []);
+
+  const queueSidebarWidthUpdate = useCallback((nextWidth: number) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    pendingSidebarWidthRef.current = nextWidth;
+    if (resizeRafIdRef.current !== null) {
+      return;
+    }
+
+    resizeRafIdRef.current = window.requestAnimationFrame(() => {
+      resizeRafIdRef.current = null;
+      const pendingWidth = pendingSidebarWidthRef.current;
+      if (pendingWidth === null) {
+        return;
+      }
+
+      pendingSidebarWidthRef.current = null;
+      setDesktopSidebarWidth(pendingWidth);
+    });
+  }, []);
+
+  const activeWorkspace = useMemo(() => {
+    if (!activeWorkspaceId) {
+      return null;
+    }
+
+    return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+  }, [activeWorkspaceId, workspaces]);
+
+  const workspaceResourceCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const resource of resources) {
+      counts[resource.workspaceId] = (counts[resource.workspaceId] ?? 0) + 1;
+    }
+    return counts;
+  }, [resources]);
+
+  const resourcesInActiveWorkspace = useMemo(() => {
+    if (!activeWorkspaceId) {
+      return [];
+    }
+
+    return resources.filter((resource) => resource.workspaceId === activeWorkspaceId);
+  }, [activeWorkspaceId, resources]);
 
   const resourceCounts = useMemo(() => {
     const counts: Record<string, number> = {};
 
-    for (const resource of resources) {
+    for (const resource of resourcesInActiveWorkspace) {
       counts[resource.category] = (counts[resource.category] ?? 0) + 1;
     }
 
     return counts;
-  }, [resources]);
+  }, [resourcesInActiveWorkspace]);
 
   const categories = useMemo(() => {
+    if (!activeWorkspaceId) {
+      return [];
+    }
+
     const uniqueByKey = new Map<string, string>();
 
     for (const categoryRecord of categoryRecords) {
+      if (categoryRecord.workspaceId !== activeWorkspaceId) {
+        continue;
+      }
+
       const normalized = categoryRecord.name.trim();
       if (!normalized) {
         continue;
@@ -286,7 +447,7 @@ export default function Page() {
       uniqueByKey.set(normalized.toLowerCase(), normalized);
     }
 
-    for (const resource of resources) {
+    for (const resource of resourcesInActiveWorkspace) {
       const normalized = resource.category.trim();
       if (!normalized) {
         continue;
@@ -295,17 +456,24 @@ export default function Page() {
       if (!uniqueByKey.has(key)) {
         uniqueByKey.set(key, normalized);
       }
-      uniqueByKey.set(normalized.toLowerCase(), normalized);
     }
 
     return [...uniqueByKey.values()].sort((left, right) =>
       left.localeCompare(right, undefined, { sensitivity: "base" }),
     );
-  }, [categoryRecords, resources]);
+  }, [activeWorkspaceId, categoryRecords, resourcesInActiveWorkspace]);
 
   const categorySymbols = useMemo(() => {
     const next: Record<string, string | undefined> = {};
+    if (!activeWorkspaceId) {
+      return next;
+    }
+
     for (const category of categoryRecords) {
+      if (category.workspaceId !== activeWorkspaceId) {
+        continue;
+      }
+
       const normalized = category.name.trim();
       if (!normalized) {
         continue;
@@ -315,10 +483,10 @@ export default function Page() {
       next[normalized] = symbol || undefined;
     }
     return next;
-  }, [categoryRecords]);
+  }, [activeWorkspaceId, categoryRecords]);
 
   const filteredResources = useMemo(() => {
-    let result = resources;
+    let result = resourcesInActiveWorkspace;
 
     if (activeCategory !== "All") {
       result = result.filter(
@@ -344,19 +512,36 @@ export default function Page() {
     }
 
     return result;
-  }, [resources, activeCategory, searchQuery]);
+  }, [resourcesInActiveWorkspace, activeCategory, searchQuery]);
+
+  const activeCategoryCount =
+    activeCategory === "All"
+      ? resourcesInActiveWorkspace.length
+      : (resourceCounts[activeCategory] ?? 0);
+  const activeCategorySymbol =
+    activeCategory === "All" ? null : (categorySymbols[activeCategory] ?? null);
+  const activeSectionTitle =
+    activeCategory === "All" ? "All Resources" : activeCategory;
+  const isSearchActive = searchQuery.trim().length > 0;
 
   const totalLinks = useMemo(
-    () => resources.reduce((acc, resource) => acc + resource.links.length, 0),
-    [resources],
+    () =>
+      resourcesInActiveWorkspace.reduce(
+        (acc, resource) => acc + resource.links.length,
+        0,
+      ),
+    [resourcesInActiveWorkspace],
   );
   const categoryRecordByLowerName = useMemo(() => {
     const next = new Map<string, ResourceCategory>();
     for (const category of categoryRecords) {
+      if (activeWorkspaceId && category.workspaceId !== activeWorkspaceId) {
+        continue;
+      }
       next.set(category.name.toLowerCase(), category);
     }
     return next;
-  }, [categoryRecords]);
+  }, [activeWorkspaceId, categoryRecords]);
 
   const activeCategoryRecord = useMemo(() => {
     if (activeCategory === "All") {
@@ -418,15 +603,157 @@ export default function Page() {
     }
   }, []);
 
+  const fetchWorkspaces = useCallback(async () => {
+    try {
+      const response = await fetch("/api/workspaces", {
+        cache: "no-store",
+      });
+      const payload = await readJson<ListWorkspacesResponse>(response);
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to load workspaces.");
+      }
+
+      setWorkspaces(payload?.workspaces ?? []);
+      if (payload?.mode) {
+        setDataMode(payload.mode);
+      }
+    } catch (error) {
+      console.error(
+        "Failed to fetch workspaces:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }, []);
+
   useEffect(() => {
-    void Promise.all([fetchResources(), fetchCategories()]);
-  }, [fetchCategories, fetchResources]);
+    void Promise.all([fetchResources(), fetchCategories(), fetchWorkspaces()]);
+  }, [fetchCategories, fetchResources, fetchWorkspaces, sessionUserId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const savedWorkspaceId = window.localStorage.getItem(
+      ACTIVE_WORKSPACE_STORAGE_KEY,
+    );
+    if (savedWorkspaceId) {
+      setActiveWorkspaceId(savedWorkspaceId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (workspaces.length === 0) {
+      setActiveWorkspaceId(null);
+      return;
+    }
+
+    setActiveWorkspaceId((previous) => {
+      if (previous && workspaces.some((workspace) => workspace.id === previous)) {
+        return previous;
+      }
+
+      return workspaces[0]?.id ?? null;
+    });
+  }, [workspaces]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !activeWorkspaceId) {
+      return;
+    }
+
+    window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, activeWorkspaceId);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     if (activeCategory !== "All" && !categories.includes(activeCategory)) {
       setActiveCategory("All");
     }
   }, [activeCategory, categories]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const storedWidth = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    if (storedWidth) {
+      const parsedWidth = Number.parseInt(storedWidth, 10);
+      if (Number.isFinite(parsedWidth)) {
+        setDesktopSidebarWidth(
+          clampDesktopSidebarWidth(parsedWidth, window.innerWidth),
+        );
+      }
+    } else {
+      window.localStorage.setItem(
+        SIDEBAR_WIDTH_STORAGE_KEY,
+        String(
+          clampDesktopSidebarWidth(
+            DESKTOP_SIDEBAR_DEFAULT_WIDTH,
+            window.innerWidth,
+          ),
+        ),
+      );
+    }
+
+    hasLoadedSidebarWidthRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncSidebarWidth = (viewportWidth: number) => {
+      setDesktopSidebarWidth((currentWidth) =>
+        clampDesktopSidebarWidth(currentWidth, viewportWidth),
+      );
+    };
+
+    syncSidebarWidth(window.innerWidth);
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver((entries) => {
+        const viewportWidth =
+          entries[0]?.contentRect.width ?? window.innerWidth;
+        syncSidebarWidth(viewportWidth);
+      });
+
+      observer.observe(document.documentElement);
+      return () => {
+        observer.disconnect();
+      };
+    }
+
+    const handleWindowResize = () => {
+      syncSidebarWidth(window.innerWidth);
+    };
+
+    window.addEventListener("resize", handleWindowResize);
+    return () => {
+      window.removeEventListener("resize", handleWindowResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasLoadedSidebarWidthRef.current) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      SIDEBAR_WIDTH_STORAGE_KEY,
+      String(desktopSidebarWidth),
+    );
+  }, [desktopSidebarWidth]);
+
+  useEffect(() => {
+    return () => {
+      if (resizeRafIdRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafIdRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -663,8 +990,62 @@ export default function Page() {
     [setColorSchemeByIndex],
   );
 
+  const handleCreateWorkspace = useCallback(async () => {
+    if (!canSubmitWorkspace) {
+      return;
+    }
+
+    setIsWorkspaceMutating(true);
+
+    try {
+      const response = await fetch("/api/workspaces", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: newWorkspaceName.trim(),
+        }),
+      });
+      const payload = await readJson<WorkspaceResponse>(response);
+
+      if (!response.ok || !payload?.workspace) {
+        throw new Error(payload?.error ?? "Failed to create workspace.");
+      }
+      const createdWorkspace = payload.workspace;
+
+      if (payload.mode) {
+        setDataMode(payload.mode);
+      }
+
+      setWorkspaces((previous) => {
+        const next = [
+          ...previous.filter((item) => item.id !== createdWorkspace.id),
+        ];
+        next.push(createdWorkspace);
+        return next;
+      });
+      setActiveWorkspaceId(createdWorkspace.id);
+      setActiveCategory("All");
+      setNewWorkspaceName("");
+      setCreateWorkspaceDialogOpen(false);
+      void fetchWorkspaces();
+
+      toast.success("Workspace created", {
+        description: `${createdWorkspace.name} is ready.`,
+      });
+    } catch (error) {
+      toast.error("Workspace creation failed", {
+        description:
+          error instanceof Error ? error.message : "Could not create workspace.",
+      });
+    } finally {
+      setIsWorkspaceMutating(false);
+    }
+  }, [canSubmitWorkspace, fetchWorkspaces, newWorkspaceName]);
+
   const handleCreateCategory = useCallback(async () => {
-    if (!canSubmitCategory) {
+    if (!canSubmitCategory || !activeWorkspaceId) {
       return;
     }
 
@@ -677,6 +1058,7 @@ export default function Page() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          workspaceId: activeWorkspaceId,
           name: newCategoryName.trim(),
           symbol: newCategorySymbol.trim() || null,
         }),
@@ -716,11 +1098,17 @@ export default function Page() {
     } finally {
       setIsCategoryMutating(false);
     }
-  }, [canSubmitCategory, fetchCategories, newCategoryName, newCategorySymbol]);
+  }, [
+    activeWorkspaceId,
+    canSubmitCategory,
+    fetchCategories,
+    newCategoryName,
+    newCategorySymbol,
+  ]);
 
   const handleUpdateCategorySymbolByName = useCallback(
     async (categoryName: string) => {
-      if (!canManageResources || categoryName === "All") {
+      if (!canManageCategories || categoryName === "All") {
         return;
       }
 
@@ -781,12 +1169,12 @@ export default function Page() {
         setIsCategoryMutating(false);
       }
     },
-    [canManageResources, categoryRecordByLowerName],
+    [canManageCategories, categoryRecordByLowerName],
   );
 
   const handleDeleteCategoryByName = useCallback(
     async (categoryName: string) => {
-      if (!canManageResources || categoryName === "All") {
+      if (!canManageCategories || categoryName === "All") {
         return;
       }
 
@@ -849,6 +1237,7 @@ export default function Page() {
                   ...resource,
                   category:
                     payload.reassignedCategory?.name ?? resource.category,
+                  ownerUserId: payload.reassignedCategory?.ownerUserId ?? null,
                 }
               : resource,
           ),
@@ -872,7 +1261,7 @@ export default function Page() {
         setIsCategoryMutating(false);
       }
     },
-    [canManageResources, categoryRecordByLowerName, fetchCategories],
+    [canManageCategories, categoryRecordByLowerName, fetchCategories],
   );
 
   const handleUpdateActiveCategorySymbol = useCallback(async () => {
@@ -944,17 +1333,38 @@ export default function Page() {
 
   const handleSave = useCallback(
     async (input: ResourceInput) => {
-      if (!canManageResources) {
-        toast.error("Admin access required", {
-          description: "Only admins can add or edit resource cards.",
+      const isEditing = editingResource !== null;
+      if (!isEditing && !canManageResources) {
+        toast.error("Insufficient permissions", {
+          description: "You do not have access to create resource cards.",
         });
         return;
       }
 
-      const isEditing = editingResource !== null;
+      if (isEditing && !canManageResourceCard(editingResource)) {
+        toast.error("Insufficient permissions", {
+          description: "You can only edit cards that you own.",
+        });
+        return;
+      }
+
+      const targetWorkspaceId =
+        input.workspaceId ?? editingResource?.workspaceId ?? activeWorkspaceId;
+      if (!targetWorkspaceId) {
+        toast.error("Workspace unavailable", {
+          description: "Select a workspace before saving this resource.",
+        });
+        return;
+      }
+
       setIsSaving(true);
 
       try {
+        const payloadInput: ResourceInput = {
+          ...input,
+          workspaceId: targetWorkspaceId,
+        };
+
         const response = await fetch(
           isEditing ? `/api/resources/${editingResource.id}` : "/api/resources",
           {
@@ -962,7 +1372,7 @@ export default function Page() {
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify(input),
+            body: JSON.stringify(payloadInput),
           },
         );
 
@@ -1005,7 +1415,13 @@ export default function Page() {
         setIsSaving(false);
       }
     },
-    [canManageResources, editingResource, fetchCategories],
+    [
+      activeWorkspaceId,
+      canManageResourceCard,
+      canManageResources,
+      editingResource,
+      fetchCategories,
+    ],
   );
 
   const handleCardHoverChange = useCallback((resource: ResourceCard | null) => {
@@ -1020,6 +1436,7 @@ export default function Page() {
       type: "card",
       resourceId: resource.id,
       category: resource.category,
+      workspaceId: resource.workspaceId,
     });
   }, []);
 
@@ -1032,38 +1449,50 @@ export default function Page() {
         return;
       }
 
+      if (!activeWorkspaceId) {
+        return;
+      }
+
       setPasteHoverTarget({
         type: "category",
         category,
+        workspaceId: activeWorkspaceId,
       });
     },
-    [],
+    [activeWorkspaceId],
   );
 
   const handleDesktopSidebarResizeStart = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0) {
+      if (event.button !== 0 || !isDesktopSidebarEnabled()) {
         return;
       }
 
       event.preventDefault();
+      const pointerId = event.pointerId;
+      const handleElement = event.currentTarget;
       const startX = event.clientX;
       const startWidth = desktopSidebarWidth;
       setIsSidebarResizing(true);
+      handleElement.setPointerCapture(pointerId);
       document.body.style.userSelect = "none";
       document.body.style.cursor = "col-resize";
 
       const handlePointerMove = (moveEvent: PointerEvent) => {
         const nextWidth = clampDesktopSidebarWidth(
           startWidth + moveEvent.clientX - startX,
+          window.innerWidth,
         );
-        setDesktopSidebarWidth(nextWidth);
+        queueSidebarWidthUpdate(nextWidth);
       };
 
       const stopResizing = () => {
         setIsSidebarResizing(false);
         document.body.style.userSelect = "";
         document.body.style.cursor = "";
+        if (handleElement.hasPointerCapture(pointerId)) {
+          handleElement.releasePointerCapture(pointerId);
+        }
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", stopResizing);
         window.removeEventListener("pointercancel", stopResizing);
@@ -1073,15 +1502,52 @@ export default function Page() {
       window.addEventListener("pointerup", stopResizing);
       window.addEventListener("pointercancel", stopResizing);
     },
-    [desktopSidebarWidth],
+    [desktopSidebarWidth, isDesktopSidebarEnabled, queueSidebarWidthUpdate],
+  );
+
+  const handleDesktopSidebarResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!event.altKey || !isDesktopSidebarEnabled()) {
+        return;
+      }
+
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+
+      event.preventDefault();
+      const delta =
+        event.key === "ArrowRight" ? SIDEBAR_KEYBOARD_STEP : -SIDEBAR_KEYBOARD_STEP;
+      setDesktopSidebarWidth((currentWidth) =>
+        clampDesktopSidebarWidth(currentWidth + delta, window.innerWidth),
+      );
+    },
+    [isDesktopSidebarEnabled],
   );
 
   const handlePasteIntoHoverTarget = useCallback(
     async (rawUrl: string, target: PasteHoverTarget) => {
-      if (!canManageResources) {
-        toast.error("Admin access required", {
+      if (target.type === "category" && !canManageResources) {
+        toast.error("Insufficient permissions", {
           description:
-            "Only admins can paste links directly into cards or categories.",
+            "You do not have access to create resources in categories.",
+        });
+        return;
+      }
+
+      const currentCardTarget =
+        target.type === "card"
+          ? resources.find((resource) => resource.id === target.resourceId)
+          : null;
+      if (target.type === "card" && !currentCardTarget) {
+        toast.error("Card not found", {
+          description: "The hovered card no longer exists.",
+        });
+        return;
+      }
+      if (target.type === "card" && !canManageResourceCard(currentCardTarget)) {
+        toast.error("Insufficient permissions", {
+          description: "You can only paste links into cards that you own.",
         });
         return;
       }
@@ -1127,13 +1593,8 @@ export default function Page() {
           note: briefDescription || undefined,
         };
 
-        if (target.type === "card") {
-          const currentResource = resources.find(
-            (resource) => resource.id === target.resourceId,
-          );
-          if (!currentResource) {
-            throw new Error("Hovered card no longer exists.");
-          }
+        if (target.type === "card" && currentCardTarget) {
+          const currentResource = currentCardTarget;
 
           const alreadyHasLink = currentResource.links.some(
             (link) => link.url.toLowerCase() === url.toLowerCase(),
@@ -1144,6 +1605,7 @@ export default function Page() {
           }
 
           const nextInput: ResourceInput = {
+            workspaceId: currentResource.workspaceId,
             category: currentResource.category,
             tags: mergeTags(currentResource.tags ?? [], aiTags),
             links: [...currentResource.links, linkInput].map((link) => ({
@@ -1194,6 +1656,7 @@ export default function Page() {
                 );
 
           const createInput: ResourceInput = {
+            workspaceId: target.workspaceId,
             category: targetCategory,
             tags: aiTags,
             links: [linkInput],
@@ -1245,6 +1708,7 @@ export default function Page() {
     },
     [
       activeCategory,
+      canManageResourceCard,
       canManageResources,
       fetchCategories,
       isAiPasteRunning,
@@ -1269,12 +1733,24 @@ export default function Page() {
 
   const handlePasteFromClipboardToTarget = useCallback(
     async (target: PasteHoverTarget) => {
-      if (!canManageResources) {
-        toast.error("Admin access required", {
+      if (target.type === "category" && !canManageResources) {
+        toast.error("Insufficient permissions", {
           description:
-            "Only admins can paste links directly into cards or categories.",
+            "You do not have access to create resources in categories.",
         });
         return;
+      }
+
+      if (target.type === "card") {
+        const currentResource = resources.find(
+          (resource) => resource.id === target.resourceId,
+        );
+        if (!currentResource || !canManageResourceCard(currentResource)) {
+          toast.error("Insufficient permissions", {
+            description: "You can only paste links into cards that you own.",
+          });
+          return;
+        }
       }
 
       try {
@@ -1289,7 +1765,13 @@ export default function Page() {
         });
       }
     },
-    [canManageResources, handlePasteIntoHoverTarget, readFirstUrlFromClipboard],
+    [
+      canManageResourceCard,
+      canManageResources,
+      handlePasteIntoHoverTarget,
+      readFirstUrlFromClipboard,
+      resources,
+    ],
   );
 
   const handlePasteIntoCardFromClipboard = useCallback(
@@ -1298,6 +1780,7 @@ export default function Page() {
         type: "card",
         resourceId: resource.id,
         category: resource.category,
+        workspaceId: resource.workspaceId,
       });
     },
     [handlePasteFromClipboardToTarget],
@@ -1305,12 +1788,20 @@ export default function Page() {
 
   const handlePasteIntoCategoryFromClipboard = useCallback(
     (category: string | "All") => {
+      if (!activeWorkspaceId) {
+        toast.error("Workspace unavailable", {
+          description: "Select a workspace first.",
+        });
+        return;
+      }
+
       void handlePasteFromClipboardToTarget({
         type: "category",
         category,
+        workspaceId: activeWorkspaceId,
       });
     },
-    [handlePasteFromClipboardToTarget],
+    [activeWorkspaceId, handlePasteFromClipboardToTarget],
   );
 
   useEffect(() => {
@@ -1374,16 +1865,21 @@ export default function Page() {
 
   const handleDelete = useCallback(
     async (resourceId: string) => {
-      if (!canManageResources) {
-        toast.error("Admin access required", {
-          description: "Only admins can archive resource cards.",
-        });
-        return;
-      }
-
       const archivedResource = resources.find(
         (resource) => resource.id === resourceId,
       );
+      if (!archivedResource) {
+        toast.error("Resource not found", {
+          description: "The selected card no longer exists.",
+        });
+        return;
+      }
+      if (!canManageResourceCard(archivedResource)) {
+        toast.error("Insufficient permissions", {
+          description: "You can only archive cards that you own.",
+        });
+        return;
+      }
       setDeletingResourceId(resourceId);
 
       try {
@@ -1441,26 +1937,75 @@ export default function Page() {
         setDeletingResourceId(null);
       }
     },
-    [canManageResources, handleRestoreArchivedResource, resources],
+    [canManageResourceCard, handleRestoreArchivedResource, resources],
   );
 
-  const handleEdit = useCallback((resource: ResourceCard) => {
-    setEditingResource(resource);
-    setModalOpen(true);
-  }, []);
+  const handleEdit = useCallback(
+    (resource: ResourceCard) => {
+      if (!canManageResourceCard(resource)) {
+        toast.error("Insufficient permissions", {
+          description: "You can only edit cards that you own.",
+        });
+        return;
+      }
+
+      setEditingResource(resource);
+      setModalOpen(true);
+    },
+    [canManageResourceCard],
+  );
 
   const handleOpenCreateResourceModal = useCallback(() => {
+    if (!canManageResources) {
+      toast.error("Insufficient permissions", {
+        description: "You do not have access to create resource cards.",
+      });
+      return;
+    }
+
+    if (!activeWorkspaceId) {
+      toast.error("Workspace unavailable", {
+        description: "Select a workspace before creating a resource card.",
+      });
+      return;
+    }
+
     setEditingResource(null);
     setModalOpen(true);
-  }, []);
+  }, [activeWorkspaceId, canManageResources]);
 
   const handleOpenCreateCategoryDialog = useCallback(() => {
+    if (!canManageCategories) {
+      toast.error("Insufficient permissions", {
+        description: "You do not have access to create categories.",
+      });
+      return;
+    }
+
+    if (!activeWorkspaceId) {
+      toast.error("Workspace unavailable", {
+        description: "Select a workspace before creating a category.",
+      });
+      return;
+    }
+
     setCreateCategoryDialogOpen(true);
-  }, []);
+  }, [activeWorkspaceId, canManageCategories]);
+
+  const handleOpenCreateWorkspaceDialog = useCallback(() => {
+    if (!canCreateWorkspaces) {
+      toast.error("Authentication required", {
+        description: "Sign in to create personal workspaces.",
+      });
+      return;
+    }
+
+    setCreateWorkspaceDialogOpen(true);
+  }, [canCreateWorkspaces]);
 
   const handleRefreshLibrary = useCallback(() => {
-    void Promise.all([fetchResources(), fetchCategories()]);
-  }, [fetchCategories, fetchResources]);
+    void Promise.all([fetchResources(), fetchCategories(), fetchWorkspaces()]);
+  }, [fetchCategories, fetchResources, fetchWorkspaces]);
 
   const handleModalOpenChange = useCallback((open: boolean) => {
     setModalOpen(open);
@@ -1475,9 +2020,9 @@ export default function Page() {
         <Button
           variant="ghost"
           size="icon"
-          className="text-muted-foreground lg:hidden"
+          className="text-muted-foreground md:hidden"
           onClick={() => setSidebarOpen(true)}
-          aria-label="Open category menu"
+          aria-label="Open workspace and category menu"
         >
           <Menu className="h-5 w-5" />
         </Button>
@@ -1501,8 +2046,11 @@ export default function Page() {
               </span>
             ) : null}
             <div className="inline-flex flex-col rounded-xl border border-border bg-secondary/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-              <span>{resources.length} cards</span>
+              <span>{resourcesInActiveWorkspace.length} cards</span>
               <span>{totalLinks} links</span>
+              <span className="max-w-40 truncate">
+                {activeWorkspace?.name ?? "Main Workspace"}
+              </span>
               {dataMode === "mock" ? (
                 <span className="text-[10px] uppercase tracking-wide text-amber-600">
                   mock mode
@@ -1612,18 +2160,29 @@ export default function Page() {
                   </Link>
                 </Button>
               ) : null}
-              {canManageResources ? (
+              {canCreateWorkspaces ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleOpenCreateWorkspaceDialog}
+                  disabled={isWorkspaceMutating}
+                >
+                  <Plus className="h-4 w-4" />
+                  <span className="ml-2 hidden sm:inline">New Workspace</span>
+                </Button>
+              ) : null}
+              {canManageCategories ? (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleOpenCreateCategoryDialog}
-                  disabled={isCategoryMutating}
+                  disabled={isCategoryMutating || !activeWorkspaceId}
                 >
                   <FolderPlus className="h-4 w-4" />
                   <span className="ml-2 hidden sm:inline">New Category</span>
                 </Button>
               ) : null}
-              {canManageResources &&
+              {canManageCategories &&
               activeCategory !== "All" &&
               activeCategoryRecord ? (
                 <Button
@@ -1638,7 +2197,7 @@ export default function Page() {
                   <span className="sm:hidden">Symbol</span>
                 </Button>
               ) : null}
-              {canManageResources &&
+              {canManageCategories &&
               activeCategory !== "All" &&
               activeCategoryRecord ? (
                 <Button
@@ -1664,7 +2223,7 @@ export default function Page() {
                   onClick={handleOpenCreateResourceModal}
                   className="gap-2"
                   size="sm"
-                  disabled={isLoading || Boolean(loadError)}
+                  disabled={isLoading || Boolean(loadError) || !activeWorkspaceId}
                 >
                   <Plus className="h-4 w-4" />
                   <span className="hidden sm:inline">Add Resource</span>
@@ -1692,7 +2251,26 @@ export default function Page() {
 
       <div className="flex flex-1 overflow-hidden">
         <aside
-          className="relative hidden shrink-0 border-r border-border bg-card lg:block"
+          className="hidden w-20 shrink-0 border-r border-border bg-card md:block"
+          aria-label="Workspace navigation"
+        >
+          <WorkspaceRail
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onWorkspaceChange={(workspaceId) => {
+              setActiveWorkspaceId(workspaceId);
+              setActiveCategory("All");
+            }}
+            canCreateWorkspace={canCreateWorkspaces}
+            onCreateWorkspace={handleOpenCreateWorkspaceDialog}
+            resourceCountsByWorkspace={workspaceResourceCounts}
+          />
+        </aside>
+
+        <aside
+          className={`group/sidebar relative hidden shrink-0 border-r border-border bg-card md:block ${
+            isSidebarResizing ? "" : "transition-[width] duration-200 ease-in-out"
+          }`}
           style={{ width: `${desktopSidebarWidth}px` }}
           aria-label="Category navigation"
         >
@@ -1703,7 +2281,8 @@ export default function Page() {
             onHoverCategoryChange={handleCategoryHoverChange}
             resourceCounts={resourceCounts}
             categorySymbols={categorySymbols}
-            canManageCategories={canManageResources}
+            canManageCategories={canManageCategories}
+            canPasteIntoCategory={canManageResources && Boolean(activeWorkspaceId)}
             onCreateCategory={handleOpenCreateCategoryDialog}
             onEditCategorySymbol={(category) => {
               void handleUpdateCategorySymbolByName(category);
@@ -1717,17 +2296,45 @@ export default function Page() {
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize categories panel"
+            aria-valuemin={DESKTOP_SIDEBAR_MIN_WIDTH}
+            aria-valuemax={desktopSidebarMaxWidth}
+            aria-valuenow={desktopSidebarWidth}
+            tabIndex={0}
             onPointerDown={handleDesktopSidebarResizeStart}
-            className={`absolute inset-y-0 right-0 z-10 w-3 translate-x-1/2 cursor-col-resize touch-none ${
-              isSidebarResizing ? "bg-primary/20" : ""
+            onKeyDown={handleDesktopSidebarResizeKeyDown}
+            className={`absolute inset-y-0 right-0 z-10 w-4 translate-x-1/2 cursor-col-resize touch-none outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 after:rounded-full after:transition-colors after:duration-200 after:ease-in-out ${
+              isSidebarResizing
+                ? "after:bg-sidebar-ring"
+                : "after:bg-transparent group-hover/sidebar:after:bg-sidebar-border/50 hover:after:bg-sidebar-border focus-visible:after:bg-sidebar-ring"
             }`}
           />
         </aside>
 
         <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
           <SheetContent side="left" className="w-72 p-0">
+            <div className="border-b border-border/70 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Workspaces
+              </p>
+              <div className="mt-2">
+                <WorkspaceRail
+                  workspaces={workspaces}
+                  activeWorkspaceId={activeWorkspaceId}
+                  orientation="horizontal"
+                  onWorkspaceChange={(workspaceId) => {
+                    setActiveWorkspaceId(workspaceId);
+                    setActiveCategory("All");
+                  }}
+                  canCreateWorkspace={canCreateWorkspaces}
+                  onCreateWorkspace={handleOpenCreateWorkspaceDialog}
+                  resourceCountsByWorkspace={workspaceResourceCounts}
+                />
+              </div>
+            </div>
             <SheetHeader className="px-4 pt-4">
-              <SheetTitle>Categories</SheetTitle>
+              <SheetTitle className="w-fit section-title-pill">
+                Categories
+              </SheetTitle>
               <SheetDescription className="sr-only">
                 Filter resources by category
               </SheetDescription>
@@ -1742,7 +2349,10 @@ export default function Page() {
               onHoverCategoryChange={handleCategoryHoverChange}
               resourceCounts={resourceCounts}
               categorySymbols={categorySymbols}
-              canManageCategories={canManageResources}
+              canManageCategories={canManageCategories}
+              canPasteIntoCategory={
+                canManageResources && Boolean(activeWorkspaceId)
+              }
               onCreateCategory={handleOpenCreateCategoryDialog}
               onEditCategorySymbol={(category) => {
                 void handleUpdateCategorySymbolByName(category);
@@ -1761,6 +2371,28 @@ export default function Page() {
               className="flex-1 overflow-y-auto p-4 lg:p-6"
               aria-label="Resource cards"
             >
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-3 border-b border-border/60 pb-4">
+                <div className="space-y-2">
+                  <p className="section-title-pill">
+                    <FolderOpen className="h-3.5 w-3.5 text-primary" />
+                    {activeCategory === "All" ? "Library" : "Category"}
+                  </p>
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Workspace: {activeWorkspace?.name ?? "Main Workspace"}
+                  </p>
+                  <h2 className="section-title-heading text-xl sm:text-2xl">
+                    {activeCategorySymbol ? `${activeCategorySymbol} ` : ""}
+                    {activeSectionTitle}
+                  </h2>
+                </div>
+                <p className="text-xs text-muted-foreground sm:text-sm">
+                  {activeCategoryCount} resource
+                  {activeCategoryCount === 1 ? "" : "s"}
+                  {isSearchActive
+                    ? ` total, ${filteredResources.length} shown`
+                    : ""}
+                </p>
+              </div>
               {isLoading ? (
                 <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
                   <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -1795,8 +2427,8 @@ export default function Page() {
                         : canManageResources
                           ? "Add your first resource to get started!"
                           : isAuthenticated
-                            ? "You are signed in as read-only. Ask FirstAdmin for admin access."
-                            : "Sign in to request admin access and manage resources."}
+                            ? "You are signed in as read-only. Ask FirstAdmin for editor or admin access."
+                            : "Sign in to manage categories and resources based on your role."}
                     </p>
                   </div>
                   {!searchQuery && canManageResources ? (
@@ -1830,7 +2462,7 @@ export default function Page() {
                       onPasteLinkIntoCard={handlePasteIntoCardFromClipboard}
                       onHoverChange={handleCardHoverChange}
                       isDeleting={deletingResourceId === resource.id}
-                      canManage={canManageResources}
+                      canManage={canManageResourceCard(resource)}
                     />
                   ))}
                 </div>
@@ -1843,15 +2475,11 @@ export default function Page() {
             {canManageResources ? (
               <>
                 <ContextMenuItem
-                  disabled={isLoading || Boolean(loadError)}
+                  disabled={isLoading || Boolean(loadError) || !activeWorkspaceId}
                   onSelect={handleOpenCreateResourceModal}
                 >
                   <Plus className="mr-2 h-4 w-4" />
                   Add resource card
-                </ContextMenuItem>
-                <ContextMenuItem onSelect={handleOpenCreateCategoryDialog}>
-                  <FolderPlus className="mr-2 h-4 w-4" />
-                  Create category
                 </ContextMenuItem>
                 <ContextMenuItem
                   onSelect={() =>
@@ -1864,8 +2492,19 @@ export default function Page() {
                     ? "a suggested category"
                     : activeCategory}
                 </ContextMenuItem>
-                <ContextMenuSeparator />
               </>
+            ) : null}
+            {canManageCategories ? (
+              <ContextMenuItem
+                disabled={!activeWorkspaceId}
+                onSelect={handleOpenCreateCategoryDialog}
+              >
+                <FolderPlus className="mr-2 h-4 w-4" />
+                Create category
+              </ContextMenuItem>
+            ) : null}
+            {canManageResources || canManageCategories ? (
+              <ContextMenuSeparator />
             ) : null}
             <ContextMenuItem
               disabled={searchQuery.trim().length === 0}
@@ -1890,6 +2529,45 @@ export default function Page() {
       </div>
 
       <Dialog
+        open={createWorkspaceDialogOpen}
+        onOpenChange={(open) => {
+          setCreateWorkspaceDialogOpen(open);
+          if (!open) {
+            setNewWorkspaceName("");
+            setIsWorkspaceMutating(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create Workspace</DialogTitle>
+            <DialogDescription>
+              Workspaces are personal spaces for organizing categories and cards.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="new-workspace-name">Name</Label>
+            <Input
+              id="new-workspace-name"
+              value={newWorkspaceName}
+              onChange={(event) => setNewWorkspaceName(event.target.value)}
+              placeholder="e.g. Client Work"
+              disabled={isWorkspaceMutating}
+            />
+          </div>
+
+          <Button
+            type="button"
+            onClick={() => void handleCreateWorkspace()}
+            disabled={!canSubmitWorkspace}
+          >
+            {isWorkspaceMutating ? "Creating..." : "Create Workspace"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={createCategoryDialogOpen}
         onOpenChange={(open) => {
           setCreateCategoryDialogOpen(open);
@@ -1904,7 +2582,8 @@ export default function Page() {
           <DialogHeader>
             <DialogTitle>Create Category</DialogTitle>
             <DialogDescription>
-              Categories are persistent and available in all future sessions.
+              Category will be created in{" "}
+              <strong>{activeWorkspace?.name ?? "Main Workspace"}</strong>.
             </DialogDescription>
           </DialogHeader>
 

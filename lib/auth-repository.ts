@@ -2,6 +2,7 @@ import "server-only"
 
 import { and, eq, gt, isNull, sql, type SQL } from "drizzle-orm"
 
+import type { UserRole } from "@/lib/authorization"
 import { appUsers, emailVerificationTokens } from "@/lib/db-schema"
 import { ensureSchema, getDb } from "@/lib/db"
 
@@ -9,6 +10,7 @@ export interface AuthUserRecord {
   id: string
   email: string
   passwordHash: string | null
+  role: UserRole
   isAdmin: boolean
   isFirstAdmin: boolean
   emailVerifiedAt: string | null
@@ -41,6 +43,7 @@ type AuthUserRow = {
   id: string
   email: string
   passwordHash: string | null
+  role: string
   isAdmin: boolean
   isFirstAdmin: boolean
   emailVerifiedAt: Date | string | null
@@ -76,10 +79,22 @@ function normalizeTokenTimestamp(value: Date | string): string {
 }
 
 function normalizeRow(row: AuthUserRow): AuthUserRecord {
+  const role: UserRole =
+    row.isFirstAdmin
+      ? "first_admin"
+      : row.isAdmin
+        ? "admin"
+        : row.role === "viewer"
+          ? "viewer"
+          : row.role === "editor"
+            ? "editor"
+            : "viewer"
+
   return {
     id: row.id,
     email: row.email,
     passwordHash: row.passwordHash,
+    role,
     isAdmin: row.isAdmin,
     isFirstAdmin: row.isFirstAdmin,
     emailVerifiedAt: normalizeTimestamp(row.emailVerifiedAt),
@@ -134,6 +149,7 @@ async function selectUserByPredicate(predicate: SQL) {
       id: appUsers.id,
       email: appUsers.email,
       passwordHash: appUsers.passwordHash,
+      role: appUsers.role,
       isAdmin: appUsers.isAdmin,
       isFirstAdmin: appUsers.isFirstAdmin,
       emailVerifiedAt: appUsers.emailVerifiedAt,
@@ -175,12 +191,13 @@ export async function hasFirstAdmin(): Promise<boolean> {
 export async function createUser(
   email: string,
   passwordHash: string | null,
-  options?: { emailVerifiedAt?: Date | null }
+  options?: { emailVerifiedAt?: Date | null; role?: UserRole }
 ): Promise<AuthUserRecord> {
   await ensureSchema()
   const db = getDb()
 
   const emailVerifiedAt = options?.emailVerifiedAt ?? null
+  const role = options?.role ?? "editor"
 
   try {
     const rows = await db
@@ -188,12 +205,14 @@ export async function createUser(
       .values({
         email: email.toLowerCase(),
         passwordHash,
+        role,
         emailVerifiedAt,
       })
       .returning({
         id: appUsers.id,
         email: appUsers.email,
         passwordHash: appUsers.passwordHash,
+        role: appUsers.role,
         isAdmin: appUsers.isAdmin,
         isFirstAdmin: appUsers.isFirstAdmin,
         emailVerifiedAt: appUsers.emailVerifiedAt,
@@ -216,7 +235,7 @@ export async function createUser(
 export async function ensureUserByEmail(
   email: string,
   passwordHash: string | null = null,
-  options?: { emailVerifiedAt?: Date | null }
+  options?: { emailVerifiedAt?: Date | null; role?: UserRole }
 ): Promise<AuthUserRecord> {
   const existing = await findUserByEmail(email)
   if (existing) {
@@ -232,12 +251,13 @@ export async function markUserAsAdmin(userId: string): Promise<AuthUserRecord> {
 
   const rows = await db
     .update(appUsers)
-    .set({ isAdmin: true })
+    .set({ isAdmin: true, isFirstAdmin: false, role: "admin" })
     .where(eq(appUsers.id, userId))
     .returning({
       id: appUsers.id,
       email: appUsers.email,
       passwordHash: appUsers.passwordHash,
+      role: appUsers.role,
       isAdmin: appUsers.isAdmin,
       isFirstAdmin: appUsers.isFirstAdmin,
       emailVerifiedAt: appUsers.emailVerifiedAt,
@@ -265,6 +285,7 @@ export async function updateUserPasswordHash(
       id: appUsers.id,
       email: appUsers.email,
       passwordHash: appUsers.passwordHash,
+      role: appUsers.role,
       isAdmin: appUsers.isAdmin,
       isFirstAdmin: appUsers.isFirstAdmin,
       emailVerifiedAt: appUsers.emailVerifiedAt,
@@ -293,6 +314,7 @@ export async function markUserEmailVerified(
       id: appUsers.id,
       email: appUsers.email,
       passwordHash: appUsers.passwordHash,
+      role: appUsers.role,
       isAdmin: appUsers.isAdmin,
       isFirstAdmin: appUsers.isFirstAdmin,
       emailVerifiedAt: appUsers.emailVerifiedAt,
@@ -416,12 +438,13 @@ export async function markUserAsFirstAdmin(
   try {
     const rows = await db
       .update(appUsers)
-      .set({ isAdmin: true, isFirstAdmin: true })
+      .set({ isAdmin: true, isFirstAdmin: true, role: "first_admin" })
       .where(eq(appUsers.id, userId))
       .returning({
         id: appUsers.id,
         email: appUsers.email,
         passwordHash: appUsers.passwordHash,
+        role: appUsers.role,
         isAdmin: appUsers.isAdmin,
         isFirstAdmin: appUsers.isFirstAdmin,
         emailVerifiedAt: appUsers.emailVerifiedAt,
@@ -454,17 +477,21 @@ export async function makeUserExclusiveFirstAdmin(
 
   await db
     .update(appUsers)
-    .set({ isFirstAdmin: false })
+    .set({
+      isFirstAdmin: false,
+      role: sql`CASE WHEN ${appUsers.role} = 'first_admin' THEN 'admin' ELSE ${appUsers.role} END`,
+    })
     .where(sql`${appUsers.id} <> ${userId}::uuid`)
 
   const rows = await db
     .update(appUsers)
-    .set({ isAdmin: true, isFirstAdmin: true })
+    .set({ isAdmin: true, isFirstAdmin: true, role: "first_admin" })
     .where(eq(appUsers.id, userId))
     .returning({
       id: appUsers.id,
       email: appUsers.email,
       passwordHash: appUsers.passwordHash,
+      role: appUsers.role,
       isAdmin: appUsers.isAdmin,
       isFirstAdmin: appUsers.isFirstAdmin,
       emailVerifiedAt: appUsers.emailVerifiedAt,
@@ -475,4 +502,69 @@ export async function makeUserExclusiveFirstAdmin(
   }
 
   return normalizeRow(rows[0] as AuthUserRow)
+}
+
+export async function listUsers(limit = 500): Promise<AuthUserRecord[]> {
+  await ensureSchema()
+  const db = getDb()
+  const boundedLimit = Math.max(1, Math.min(limit, 2000))
+
+  const rows = await db
+    .select({
+      id: appUsers.id,
+      email: appUsers.email,
+      passwordHash: appUsers.passwordHash,
+      role: appUsers.role,
+      isAdmin: appUsers.isAdmin,
+      isFirstAdmin: appUsers.isFirstAdmin,
+      emailVerifiedAt: appUsers.emailVerifiedAt,
+    })
+    .from(appUsers)
+    .orderBy(sql`lower(${appUsers.email}) asc`)
+    .limit(boundedLimit)
+
+  return rows.map((row) => normalizeRow(row as AuthUserRow))
+}
+
+export async function updateUserRole(
+  userId: string,
+  role: UserRole
+): Promise<AuthUserRecord> {
+  await ensureSchema()
+  const db = getDb()
+
+  if (role === "first_admin") {
+    await db
+      .update(appUsers)
+      .set({
+        isFirstAdmin: false,
+        role: sql`CASE WHEN ${appUsers.role} = 'first_admin' THEN 'admin' ELSE ${appUsers.role} END`,
+      })
+      .where(sql`${appUsers.id} <> ${userId}::uuid`)
+  }
+
+  const rows = await db
+    .update(appUsers)
+    .set({
+      role,
+      isAdmin: role === "admin" || role === "first_admin",
+      isFirstAdmin: role === "first_admin",
+    })
+    .where(eq(appUsers.id, userId))
+    .returning({
+      id: appUsers.id,
+      email: appUsers.email,
+      passwordHash: appUsers.passwordHash,
+      role: appUsers.role,
+      isAdmin: appUsers.isAdmin,
+      isFirstAdmin: appUsers.isFirstAdmin,
+      emailVerifiedAt: appUsers.emailVerifiedAt,
+    })
+
+  const updated = rows[0]
+  if (!updated) {
+    throw new UserNotFoundError(userId)
+  }
+
+  return normalizeRow(updated as AuthUserRow)
 }

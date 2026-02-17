@@ -1685,17 +1685,6 @@ export default function Page() {
               Sign in to save workspaces, keep categories, and sync your library.
             </div>
           ) : null}
-          {canManageResources ? (
-            <div className="hidden max-w-64 items-center truncate rounded-full border border-border bg-secondary/40 px-3 py-1 text-[11px] text-muted-foreground xl:flex">
-              {isAiPasteRunning
-                ? "Pasting link with AI..."
-                : pasteHoverTarget?.type === "card"
-                  ? "Ctrl+V into hovered card"
-                  : pasteHoverTarget?.type === "category"
-                    ? `Ctrl+V into category: ${pasteHoverTarget.category}`
-                    : "Hover a card/category, then press Ctrl+V"}
-            </div>
-          ) : null}
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm">
@@ -1894,13 +1883,9 @@ export default function Page() {
             categories={categories}
             activeCategory={activeCategory}
             onCategoryChange={setActiveCategory}
-            onHoverCategoryChange={handleCategoryHoverChange}
             resourceCounts={resourceCounts}
             categorySymbols={categorySymbols}
             canManageCategories={canManageCategories}
-            canPasteIntoCategory={
-              canManageResources && Boolean(activeWorkspaceId)
-            }
             onCreateCategory={handleOpenCreateCategoryDialog}
             onEditCategorySymbol={(category) => {
               void handleUpdateCategorySymbolByName(category);
@@ -1908,7 +1893,6 @@ export default function Page() {
             onDeleteCategory={(category) => {
               void handleDeleteCategoryByName(category);
             }}
-            onPasteIntoCategory={handlePasteIntoCategoryFromClipboard}
           />
           <div
             role="separator"
@@ -1964,13 +1948,9 @@ export default function Page() {
                 setActiveCategory(category);
                 setSidebarOpen(false);
               }}
-              onHoverCategoryChange={handleCategoryHoverChange}
               resourceCounts={resourceCounts}
               categorySymbols={categorySymbols}
               canManageCategories={canManageCategories}
-              canPasteIntoCategory={
-                canManageResources && Boolean(activeWorkspaceId)
-              }
               onCreateCategory={handleOpenCreateCategoryDialog}
               onEditCategorySymbol={(category) => {
                 void handleUpdateCategorySymbolByName(category);
@@ -1978,7 +1958,6 @@ export default function Page() {
               onDeleteCategory={(category) => {
                 void handleDeleteCategoryByName(category);
               }}
-              onPasteIntoCategory={handlePasteIntoCategoryFromClipboard}
             />
           </SheetContent>
         </Sheet>
@@ -2077,8 +2056,6 @@ export default function Page() {
                       categorySymbol={categorySymbols[resource.category]}
                       onDelete={handleDelete}
                       onEdit={handleEdit}
-                      onPasteLinkIntoCard={handlePasteIntoCardFromClipboard}
-                      onHoverChange={handleCardHoverChange}
                       isDeleting={deletingResourceId === resource.id}
                       canManage={canManageResourceCard(resource)}
                     />
@@ -2100,17 +2077,6 @@ export default function Page() {
                 >
                   <Plus className="mr-2 h-4 w-4" />
                   Add resource card
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onSelect={() =>
-                    handlePasteIntoCategoryFromClipboard(activeCategory)
-                  }
-                >
-                  <ClipboardPaste className="mr-2 h-4 w-4" />
-                  Paste URL into{" "}
-                  {activeCategory === "All"
-                    ? "a suggested category"
-                    : activeCategory}
                 </ContextMenuItem>
               </>
             ) : null}

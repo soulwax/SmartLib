@@ -60,6 +60,7 @@ interface CategorySidebarProps {
   categorySymbols?: Record<string, string | undefined>;
   canManageCategories?: boolean;
   onCreateCategory?: () => void;
+  canEditCategory?: (category: string) => boolean;
   onEditCategorySymbol?: (category: string) => void;
   onDeleteCategory?: (category: string) => void;
 }
@@ -89,6 +90,7 @@ export function CategorySidebar({
   categorySymbols = {},
   canManageCategories = false,
   onCreateCategory,
+  canEditCategory,
   onEditCategorySymbol,
   onDeleteCategory,
 }: CategorySidebarProps) {
@@ -123,6 +125,8 @@ export function CategorySidebar({
         {categoryItems.map((cat) => {
           const Icon = resolveCategoryIcon(cat);
           const isActive = activeCategory === cat;
+          const isEditableByOwner =
+            cat !== "All" && (canEditCategory?.(cat) ?? false);
           const symbol = categorySymbols[cat];
           const count =
             cat === "All"
@@ -212,12 +216,12 @@ export function CategorySidebar({
                       <FolderPlus className="mr-2 h-4 w-4" />
                       Create category
                     </ContextMenuItem>
-                    {cat !== "All" ? (
+                    {isEditableByOwner ? (
                       <ContextMenuItem
                         onSelect={() => onEditCategorySymbol?.(cat)}
                       >
                         <Pencil className="mr-2 h-4 w-4" />
-                        Edit symbol
+                        Edit category
                       </ContextMenuItem>
                     ) : null}
                     {cat !== "All" ? (

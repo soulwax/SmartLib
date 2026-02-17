@@ -13,3 +13,7 @@ tsconfig.tsbuildinfo
 .DS_Store
 
 certs/
+
+# Electron build outputs
+dist/
+dist-electron/

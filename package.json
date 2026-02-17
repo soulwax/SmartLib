@@ -2,6 +2,7 @@
   "name": "my-project",
   "version": "0.1.2",
   "private": true,
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "next dev --turbo",
     "build": "next build",
@@ -11,7 +12,13 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "electron:compile": "tsc --project tsconfig.electron.json",
+    "electron:dev": "concurrently --kill-others-on-fail \"pnpm dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "BUILD_TARGET=electron next build && pnpm electron:compile && electron-builder",
+    "electron:build:mac": "BUILD_TARGET=electron next build && pnpm electron:compile && electron-builder --mac",
+    "electron:build:win": "BUILD_TARGET=electron next build && pnpm electron:compile && electron-builder --win",
+    "electron:build:linux": "BUILD_TARGET=electron next build && pnpm electron:compile && electron-builder --linux"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -73,10 +80,14 @@
     "@types/node": "^22",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "concurrently": "^9.1.2",
     "dotenv": "^17.3.1",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
-    "typescript": "5.7.3"
+    "typescript": "5.7.3",
+    "wait-on": "^8.0.3"
   },
   "pnpm": {
     "overrides": {
@@ -85,6 +96,7 @@
     },
     "onlyBuiltDependencies": [
       "esbuild",
+      "electron",
       "sharp"
     ]
   }

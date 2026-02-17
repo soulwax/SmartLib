@@ -9,7 +9,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Display user role label alongside email in the header
-- AI link enrichment via Perplexity API — automatically fetches metadata (title, description, tags, category) for saved URLs
 - Resource metadata fields: AI-enriched title, description, and categorisation
 - Resource tags: tagging system with many-to-many relationship
 - Resource categories table with symbol/icon support and dynamic suggestions in the add-resource modal

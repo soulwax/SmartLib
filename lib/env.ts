@@ -52,15 +52,3 @@ export function getOptionalSuperAdminEnv():
     password,
   }
 }
-
-export function getOptionalPerplexityEnv():
-  | { apiKey: string; model: string }
-  | null {
-  const apiKey = process.env.PERPLEXITY_API_KEY?.trim()
-  if (!apiKey) {
-    return null
-  }
-
-  const model = process.env.PERPLEXITY_MODEL?.trim() || "sonar"
-  return { apiKey, model }
-}

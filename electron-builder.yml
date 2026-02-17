@@ -1,0 +1,105 @@
+appId: dev.bluesix.library
+productName: bluesix Library
+copyright: Copyright © 2026
+
+# Entry point for the Electron main process (compiled TS output)
+main: dist-electron/main.js
+
+directories:
+  output: dist
+  buildResources: public
+
+# Files included in the asar bundle
+files:
+  - dist-electron/**
+  - "!node_modules/**"
+  - "!.next/**"
+  - "!electron/**"
+  - "!src/**"
+
+# Files/dirs unpacked from asar (native modules need filesystem access)
+asarUnpack:
+  - "**/*.node"
+
+# Extra resources placed alongside the app (not in asar)
+# The Next.js standalone server lives here so it can be spawned at runtime
+extraResources:
+  - from: .next/standalone
+    to: server
+    filter:
+      - "**/*"
+  # Static assets must be nested under .next/static relative to the server cwd
+  - from: .next/static
+    to: server/.next/static
+    filter:
+      - "**/*"
+  # Public dir must be accessible to the server
+  - from: public
+    to: server/public
+    filter:
+      - "**/*"
+
+# macOS
+mac:
+  category: public.app-category.productivity
+  icon: public/icon.png
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# Windows
+win:
+  icon: public/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+# Linux
+linux:
+  icon: public/icon.png
+  category: Office
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+    - target: rpm
+      arch:
+        - x64
+
+# Publish configuration (update this for your distribution channel)
+# publish:
+#   provider: github
+#   owner: your-org
+#   repo: lib.bluesix.dev

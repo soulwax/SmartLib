@@ -34,6 +34,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Import path for route type definitions in `next-env.d.ts`
 - `onlyBuiltDependencies` configuration added for `sharp` in `package.json`
 
+## [0.1.3] - 2026-02-17
+
+### Added
+
+- Workspace settings panel with tabbed controls for Appearance, Layout, and Access
+- Smarter section titles with optional context lines, role hints, and compact heading mode
+- Admin quick-action controls in section headers for faster moderation workflows
+
+### Changed
+
+- Category sidebar heading now supports metadata, count badges, and optional role-aware hints
+- Mobile sheet no longer duplicates the category heading from the sidebar body
+- Empty library states now guide authenticated users without a workspace to create one first
+
+### Fixed
+
+- Enforced a hard limit of one personal workspace per signed-in account in both database and mock modes
+- Disabled the shared default workspace for authenticated users; signed-in users now only see and use their own workspace
+- Workspace creation API now returns a clear conflict response when the workspace limit is reached
+
 ## [0.1.2] - 2026-02-17
 
 ### Changed

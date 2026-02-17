@@ -18,3 +18,5 @@ certs/
 dist/
 dist-electron/
 CLAUDE.md
+.vercel
+.env*.local

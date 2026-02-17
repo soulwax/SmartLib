@@ -29,6 +29,23 @@
     @apply font-semibold leading-tight text-foreground;
     text-wrap: balance;
   }
+
+  .section-title-badge {
+    @apply inline-flex items-center rounded-md border px-2 py-0.5 font-medium uppercase text-muted-foreground;
+    font-size: 0.625rem;
+    letter-spacing: 0.08em;
+    border-color: hsl(var(--border) / 0.7);
+    background-color: hsl(var(--secondary) / 0.55);
+  }
+
+  .section-title-meta {
+    @apply text-xs font-medium text-muted-foreground;
+    letter-spacing: 0.04em;
+  }
+
+  .section-title-hint {
+    @apply text-[11px] text-muted-foreground;
+  }
 }
 
 @layer base {

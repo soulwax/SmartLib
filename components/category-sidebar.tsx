@@ -63,6 +63,12 @@ interface CategorySidebarProps {
   canEditCategory?: (category: string) => boolean;
   onEditCategorySymbol?: (category: string) => void;
   onDeleteCategory?: (category: string) => void;
+  showHeading?: boolean;
+  compactHeading?: boolean;
+  headingLabel?: string;
+  headingMeta?: string;
+  headingCount?: number;
+  roleHint?: string | null;
 }
 
 function resolveCategoryIcon(category: string): LucideIcon {
@@ -93,6 +99,12 @@ export function CategorySidebar({
   canEditCategory,
   onEditCategorySymbol,
   onDeleteCategory,
+  showHeading = true,
+  compactHeading = false,
+  headingLabel = "Categories",
+  headingMeta,
+  headingCount,
+  roleHint,
 }: CategorySidebarProps) {
   const copyText = useCallback(async (value: string, label: string) => {
     if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
@@ -116,12 +128,33 @@ export function CategorySidebar({
   return (
     <ScrollArea className="h-full">
       <div className="flex flex-col gap-1 p-4">
-        <div className="mb-3 px-1">
-          <p className="section-title-pill">
-            <Layers className="h-3.5 w-3.5 text-primary" />
-            Categories
-          </p>
-        </div>
+        {showHeading ? (
+          <div
+            className={cn(
+              "mb-3 px-1",
+              compactHeading ? "space-y-1.5" : "space-y-2",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p
+                className={cn(
+                  "section-title-pill",
+                  compactHeading ? "gap-1.5 px-2.5 py-0.5 text-[0.62rem]" : "",
+                )}
+              >
+                <Layers className="h-3.5 w-3.5 text-primary" />
+                {headingLabel}
+              </p>
+              {typeof headingCount === "number" ? (
+                <span className="section-title-badge">{headingCount}</span>
+              ) : null}
+            </div>
+            {headingMeta ? (
+              <p className="section-title-meta">{headingMeta}</p>
+            ) : null}
+            {roleHint ? <p className="section-title-hint">{roleHint}</p> : null}
+          </div>
+        ) : null}
         {categoryItems.map((cat) => {
           const Icon = resolveCategoryIcon(cat);
           const isActive = activeCategory === cat;

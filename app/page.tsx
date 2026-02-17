@@ -10,6 +10,7 @@ import {
   deriveUserRole,
   hasAdminAccess,
 } from "@/lib/authorization";
+import { cn } from "@/lib/utils";
 import type {
   ResourceCard,
   ResourceCategory,
@@ -52,6 +53,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   BookOpen,
@@ -143,6 +145,13 @@ interface PromoteAdminResponse extends ApiErrorResponse {
 
 type AuthMode = "login" | "register";
 
+interface SectionPreferences {
+  compactTitles: boolean;
+  showContextLine: boolean;
+  showRoleHints: boolean;
+  adminQuickActions: boolean;
+}
+
 async function readJson<T>(response: Response): Promise<T | null> {
   try {
     return (await response.json()) as T;
@@ -159,6 +168,13 @@ const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 304;
 const DESKTOP_SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_KEYBOARD_STEP = SIDEBAR_SNAP_GRID;
 const FALLBACK_VIEWPORT_WIDTH = 1440;
+const SECTION_PREFERENCES_STORAGE_KEY = "section-preferences";
+const DEFAULT_SECTION_PREFERENCES: SectionPreferences = {
+  compactTitles: false,
+  showContextLine: true,
+  showRoleHints: true,
+  adminQuickActions: true,
+};
 
 function snapSidebarWidth(width: number): number {
   return Math.round(width / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID;
@@ -189,6 +205,38 @@ function clampDesktopSidebarWidth(
     maxWidth,
     Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, snapSidebarWidth(width)),
   );
+}
+
+function parseSectionPreferences(
+  rawValue: string | null,
+): SectionPreferences | null {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Partial<SectionPreferences>;
+    return {
+      compactTitles:
+        typeof parsed.compactTitles === "boolean"
+          ? parsed.compactTitles
+          : DEFAULT_SECTION_PREFERENCES.compactTitles,
+      showContextLine:
+        typeof parsed.showContextLine === "boolean"
+          ? parsed.showContextLine
+          : DEFAULT_SECTION_PREFERENCES.showContextLine,
+      showRoleHints:
+        typeof parsed.showRoleHints === "boolean"
+          ? parsed.showRoleHints
+          : DEFAULT_SECTION_PREFERENCES.showRoleHints,
+      adminQuickActions:
+        typeof parsed.adminQuickActions === "boolean"
+          ? parsed.adminQuickActions
+          : DEFAULT_SECTION_PREFERENCES.adminQuickActions,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export default function Page() {
@@ -240,6 +288,8 @@ export default function Page() {
   const [promoteDialogOpen, setPromoteDialogOpen] = useState(false);
   const [promoteIdentifier, setPromoteIdentifier] = useState("");
   const [isPromotingAdmin, setIsPromotingAdmin] = useState(false);
+  const [sectionPreferences, setSectionPreferences] =
+    useState<SectionPreferences>(DEFAULT_SECTION_PREFERENCES);
   const {
     schemes: colorSchemes,
     currentSchemeIndex,
@@ -281,6 +331,15 @@ export default function Page() {
     Boolean(activeWorkspaceId);
   const desktopSidebarMaxWidth = getDesktopSidebarMaxWidth(getViewportWidth());
   const sessionUserId = session?.user?.id ?? null;
+  const updateSectionPreference = useCallback(
+    (key: keyof SectionPreferences, checked: boolean) => {
+      setSectionPreferences((previous) => ({
+        ...previous,
+        [key]: checked,
+      }));
+    },
+    [],
+  );
 
   const canManageResourceCard = useCallback(
     (resource: ResourceCard | null | undefined) => {
@@ -461,6 +520,53 @@ export default function Page() {
   const activeSectionTitle =
     activeCategory === "All" ? "All Resources" : activeCategory;
   const isSearchActive = searchQuery.trim().length > 0;
+  const sectionRoleHint = useMemo(() => {
+    if (!isAuthenticated) {
+      return "Guest mode: sign in to create workspaces, cards, and custom categories.";
+    }
+
+    if (canManageCategories) {
+      return "Admin mode: category governance and moderation controls are enabled.";
+    }
+
+    if (canManageResources) {
+      return "Editor mode: create and manage your own resource cards.";
+    }
+
+    return "Viewer mode: browse only. Ask FirstAdmin for elevated access.";
+  }, [canManageCategories, canManageResources, isAuthenticated]);
+  const sidebarHeadingLabel = sectionPreferences.compactTitles
+    ? "Explorer"
+    : "Category Explorer";
+  const sidebarHeadingMeta = sectionPreferences.showContextLine
+    ? `${activeWorkspace?.name ?? "Main Workspace"} / ${categories.length} categories`
+    : undefined;
+  const mainSectionPillLabel = isSearchActive
+    ? "Search Results"
+    : activeCategory === "All"
+      ? "Resource Library"
+      : "Category Focus";
+  const mainSectionMetaLine = sectionPreferences.showContextLine
+    ? `Workspace: ${activeWorkspace?.name ?? "Main Workspace"}`
+    : null;
+  const capabilityBadges = useMemo(() => {
+    const badges: string[] = [];
+
+    if (canCreateWorkspaces) {
+      badges.push("Workspaces");
+    }
+    if (canManageResources) {
+      badges.push("Cards");
+    }
+    if (canManageCategories) {
+      badges.push("Categories");
+    }
+    if (isAdmin) {
+      badges.push("Admin Tools");
+    }
+
+    return badges;
+  }, [canCreateWorkspaces, canManageCategories, canManageResources, isAdmin]);
 
   const totalLinks = useMemo(
     () =>
@@ -609,6 +715,31 @@ export default function Page() {
       activeWorkspaceId,
     );
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const storedPreferences = parseSectionPreferences(
+      window.localStorage.getItem(SECTION_PREFERENCES_STORAGE_KEY),
+    );
+
+    if (storedPreferences) {
+      setSectionPreferences(storedPreferences);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      SECTION_PREFERENCES_STORAGE_KEY,
+      JSON.stringify(sectionPreferences),
+    );
+  }, [sectionPreferences]);
 
   useEffect(() => {
     if (activeCategory !== "All" && !categories.includes(activeCategory)) {
@@ -1682,8 +1813,9 @@ export default function Page() {
         <div className="ml-auto flex items-center gap-2">
           {!isAuthenticated && sessionStatus !== "loading" ? (
             <div className="hidden max-w-80 items-center rounded-full border border-border bg-secondary/40 px-3 py-1 text-[11px] text-muted-foreground xl:flex">
-              Signing in lets you create your own workspace, administer your own
-              categories, and paste links with AI interpretation.
+              Signing in lets you create your own private workspace, administer
+              your own categories, and paste links with AI interpretation. You
+              can start fresh by disabling the default workspace.
             </div>
           ) : null}
           <Popover>
@@ -1693,48 +1825,188 @@ export default function Page() {
                 <span className="ml-2 hidden sm:inline">Palette</span>
               </Button>
             </PopoverTrigger>
-            <PopoverContent align="end" className="w-80 space-y-3">
+            <PopoverContent align="end" className="w-[23rem] space-y-3">
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  Color Scheme
+                  Workspace Settings
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Popular palettes used in major dev tools. Saved for{" "}
-                  {isAuthenticated ? "your account" : "this visitor"}.
+                  Tune section labels, layout density, and role-aware controls.
                 </p>
               </div>
 
-              <div className="rounded-md border border-border/70 bg-card/50 p-3">
-                <div className="mb-2 flex items-center justify-between gap-3 text-xs">
-                  <span className="truncate font-medium text-foreground">
-                    {activeColorScheme?.name ?? "Default"}
-                  </span>
-                  <span className="shrink-0 text-muted-foreground">
-                    {currentSchemeIndex + 1}/{colorSchemes.length}
-                  </span>
-                </div>
+              <Tabs defaultValue="appearance" className="space-y-3">
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="appearance">Appearance</TabsTrigger>
+                  <TabsTrigger value="layout">Layout</TabsTrigger>
+                  <TabsTrigger value="access">Access</TabsTrigger>
+                </TabsList>
 
-                <Slider
-                  value={[currentSchemeIndex]}
-                  min={0}
-                  max={Math.max(0, colorSchemes.length - 1)}
-                  step={1}
-                  onValueChange={handleColorSchemePreview}
-                  onValueCommit={handleColorSchemeCommit}
-                  aria-label="Color scheme selector"
-                />
+                <TabsContent value="appearance" className="m-0 space-y-3">
+                  <div className="rounded-md border border-border/70 bg-card/50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+                      <span className="truncate font-medium text-foreground">
+                        {activeColorScheme?.name ?? "Default"}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground">
+                        {currentSchemeIndex + 1}/{colorSchemes.length}
+                      </span>
+                    </div>
 
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {activeColorScheme?.description}
-                </p>
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  {isSavingColorScheme
-                    ? "Saving preference..."
-                    : isLoadingColorScheme
-                      ? "Loading preference..."
-                      : "Preference synced with database."}
-                </p>
-              </div>
+                    <Slider
+                      value={[currentSchemeIndex]}
+                      min={0}
+                      max={Math.max(0, colorSchemes.length - 1)}
+                      step={1}
+                      onValueChange={handleColorSchemePreview}
+                      onValueCommit={handleColorSchemeCommit}
+                      aria-label="Color scheme selector"
+                    />
+
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {activeColorScheme?.description}
+                    </p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {isSavingColorScheme
+                        ? "Saving preference..."
+                        : isLoadingColorScheme
+                          ? "Loading preference..."
+                          : "Preference synced with database."}
+                    </p>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="layout" className="m-0 space-y-3">
+                  <div className="rounded-md border border-border/70 bg-card/50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-foreground">
+                          Compact section titles
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Reduce title spacing for a denser, IDE-like layout.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={sectionPreferences.compactTitles}
+                        onCheckedChange={(checked) =>
+                          updateSectionPreference("compactTitles", checked)
+                        }
+                        aria-label="Toggle compact section titles"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-border/70 bg-card/50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-foreground">
+                          Context lines
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Show workspace and scope details under each section
+                          title.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={sectionPreferences.showContextLine}
+                        onCheckedChange={(checked) =>
+                          updateSectionPreference("showContextLine", checked)
+                        }
+                        aria-label="Toggle section context lines"
+                      />
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="access" className="m-0 space-y-3">
+                  <div className="rounded-md border border-border/70 bg-card/50 p-3">
+                    <p className="text-xs font-semibold text-foreground">
+                      {isAuthenticated
+                        ? (session?.user?.email ?? "Signed in user")
+                        : "Guest session"}
+                    </p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Role: {roleLabel}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {capabilityBadges.length > 0 ? (
+                        capabilityBadges.map((badge) => (
+                          <span key={badge} className="section-title-badge">
+                            {badge}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="section-title-badge">Read-only</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-border/70 bg-card/50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-foreground">
+                          Role hints in section headers
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Keep permissions visible while you browse and edit.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={sectionPreferences.showRoleHints}
+                        onCheckedChange={(checked) =>
+                          updateSectionPreference("showRoleHints", checked)
+                        }
+                        aria-label="Toggle role hints in section headers"
+                      />
+                    </div>
+                  </div>
+
+                  {isAdmin ? (
+                    <div className="rounded-md border border-border/70 bg-card/50 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <p className="text-xs font-semibold text-foreground">
+                            Admin quick actions
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Expose moderation shortcuts directly inside panel
+                            headers.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={sectionPreferences.adminQuickActions}
+                          onCheckedChange={(checked) =>
+                            updateSectionPreference(
+                              "adminQuickActions",
+                              checked,
+                            )
+                          }
+                          aria-label="Toggle admin quick actions"
+                        />
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button asChild variant="outline" size="sm">
+                          <Link href="/admin">Open Admin Panel</Link>
+                        </Button>
+                        {isFirstAdmin ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPromoteDialogOpen(true)}
+                          >
+                            Promote Admin
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      Admin controls appear after your account is promoted.
+                    </p>
+                  )}
+                </TabsContent>
+              </Tabs>
             </PopoverContent>
           </Popover>
 
@@ -1894,6 +2166,13 @@ export default function Page() {
             onDeleteCategory={(category) => {
               void handleDeleteCategoryByName(category);
             }}
+            headingLabel={sidebarHeadingLabel}
+            headingMeta={sidebarHeadingMeta}
+            headingCount={categories.length}
+            compactHeading={sectionPreferences.compactTitles}
+            roleHint={
+              sectionPreferences.showRoleHints ? sectionRoleHint : undefined
+            }
           />
           <div
             role="separator"
@@ -1935,11 +2214,26 @@ export default function Page() {
               </div>
             </div>
             <SheetHeader className="px-4 pt-4">
-              <SheetTitle className="w-fit section-title-pill">
-                Categories
+              <SheetTitle
+                className={cn(
+                  "w-fit section-title-pill",
+                  sectionPreferences.compactTitles
+                    ? "gap-1.5 px-2.5 py-0.5 text-[0.62rem]"
+                    : "",
+                )}
+              >
+                {sidebarHeadingLabel}
               </SheetTitle>
-              <SheetDescription className="sr-only">
-                Filter resources by category
+              <SheetDescription
+                className={
+                  sectionPreferences.showContextLine
+                    ? "text-xs text-muted-foreground"
+                    : "sr-only"
+                }
+              >
+                {sectionPreferences.showContextLine
+                  ? `Filter categories in ${activeWorkspace?.name ?? "Main Workspace"}`
+                  : "Filter resources by category"}
               </SheetDescription>
             </SheetHeader>
             <CategorySidebar
@@ -1959,6 +2253,7 @@ export default function Page() {
               onDeleteCategory={(category) => {
                 void handleDeleteCategoryByName(category);
               }}
+              showHeading={false}
             />
           </SheetContent>
         </Sheet>
@@ -1969,20 +2264,94 @@ export default function Page() {
               className="flex-1 overflow-y-auto p-4 lg:p-6"
               aria-label="Resource cards"
             >
-              <div className="mb-5 flex flex-wrap items-end justify-between gap-3 border-b border-border/60 pb-4">
-                <div className="space-y-2">
-                  <p className="section-title-pill">
-                    <FolderOpen className="h-3.5 w-3.5 text-primary" />
-                    {activeCategory === "All" ? "Library" : "Category"}
-                  </p>
-                  <p className="text-xs font-medium text-muted-foreground">
-                    Workspace: {activeWorkspace?.name ?? "Main Workspace"}
-                  </p>
-                  <h2 className="section-title-heading text-xl sm:text-2xl">
+              <div
+                className={cn(
+                  "mb-5 flex flex-wrap justify-between gap-3 border-b border-border/60",
+                  sectionPreferences.compactTitles
+                    ? "items-start pb-3"
+                    : "items-end pb-4",
+                )}
+              >
+                <div
+                  className={cn(
+                    "max-w-full",
+                    sectionPreferences.compactTitles
+                      ? "space-y-1.5"
+                      : "space-y-2",
+                  )}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p
+                      className={cn(
+                        "section-title-pill",
+                        sectionPreferences.compactTitles
+                          ? "gap-1.5 px-2.5 py-0.5 text-[0.62rem]"
+                          : "",
+                      )}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5 text-primary" />
+                      {mainSectionPillLabel}
+                    </p>
+                    <span className="section-title-badge">
+                      {activeCategoryCount} item
+                      {activeCategoryCount === 1 ? "" : "s"}
+                    </span>
+                    {sectionPreferences.showRoleHints ? (
+                      <span className="section-title-badge">{roleLabel}</span>
+                    ) : null}
+                  </div>
+
+                  {mainSectionMetaLine ? (
+                    <p className="section-title-meta">{mainSectionMetaLine}</p>
+                  ) : null}
+
+                  <h2
+                    className={cn(
+                      "section-title-heading text-xl sm:text-2xl",
+                      sectionPreferences.compactTitles
+                        ? "text-lg sm:text-xl"
+                        : "",
+                    )}
+                  >
                     {activeCategorySymbol ? `${activeCategorySymbol} ` : ""}
                     {activeSectionTitle}
                   </h2>
+
+                  {sectionPreferences.showRoleHints ? (
+                    <p className="section-title-hint">{sectionRoleHint}</p>
+                  ) : null}
+
+                  {isAdmin && sectionPreferences.adminQuickActions ? (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button asChild variant="outline" size="sm">
+                        <Link href="/admin">
+                          <Settings2 className="h-3.5 w-3.5" />
+                          <span className="ml-2">Review Queue</span>
+                        </Link>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleOpenCreateCategoryDialog}
+                        disabled={isCategoryMutating || !activeWorkspaceId}
+                      >
+                        <FolderPlus className="h-3.5 w-3.5" />
+                        <span className="ml-2">New Category</span>
+                      </Button>
+                      {isFirstAdmin ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPromoteDialogOpen(true)}
+                        >
+                          <ShieldPlus className="h-3.5 w-3.5" />
+                          <span className="ml-2">Promote</span>
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
+
                 <p className="text-xs text-muted-foreground sm:text-sm">
                   {activeCategoryCount} resource
                   {activeCategoryCount === 1 ? "" : "s"}

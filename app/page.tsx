@@ -15,6 +15,14 @@ import { useColorScheme } from "@/components/color-scheme-provider";
 import { ResourceCardItem } from "@/components/resource-card";
 import { Button } from "@/components/ui/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -39,6 +47,8 @@ import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   BookOpen,
+  ClipboardPaste,
+  FilterX,
   FolderOpen,
   FolderPlus,
   Github,
@@ -47,6 +57,7 @@ import {
   Menu,
   Palette,
   Plus,
+  RefreshCw,
   Search,
   Settings2,
   ShieldPlus,
@@ -339,16 +350,21 @@ export default function Page() {
     () => resources.reduce((acc, resource) => acc + resource.links.length, 0),
     [resources],
   );
+  const categoryRecordByLowerName = useMemo(() => {
+    const next = new Map<string, ResourceCategory>();
+    for (const category of categoryRecords) {
+      next.set(category.name.toLowerCase(), category);
+    }
+    return next;
+  }, [categoryRecords]);
+
   const activeCategoryRecord = useMemo(() => {
     if (activeCategory === "All") {
       return null;
     }
 
-    return (
-      categoryRecords.find((category) => category.name === activeCategory) ??
-      null
-    );
-  }, [activeCategory, categoryRecords]);
+    return categoryRecordByLowerName.get(activeCategory.toLowerCase()) ?? null;
+  }, [activeCategory, categoryRecordByLowerName]);
   const activeColorScheme =
     colorSchemes[currentSchemeIndex] ?? colorSchemes[0] ?? null;
 
@@ -702,28 +718,32 @@ export default function Page() {
     }
   }, [canSubmitCategory, fetchCategories, newCategoryName, newCategorySymbol]);
 
-  const handleUpdateActiveCategorySymbol = useCallback(async () => {
-    if (
-      !canManageResources ||
-      !activeCategoryRecord ||
-      activeCategory === "All"
-    ) {
-      return;
-    }
+  const handleUpdateCategorySymbolByName = useCallback(
+    async (categoryName: string) => {
+      if (!canManageResources || categoryName === "All") {
+        return;
+      }
 
-    const nextSymbol = window.prompt(
-      `Set symbol for "${activeCategoryRecord.name}" (leave empty to clear):`,
-      activeCategoryRecord.symbol ?? "",
-    );
-    if (nextSymbol === null) {
-      return;
-    }
+      const categoryRecord =
+        categoryRecordByLowerName.get(categoryName.toLowerCase()) ?? null;
+      if (!categoryRecord) {
+        toast.error("Category not found", {
+          description: `Could not find "${categoryName}".`,
+        });
+        return;
+      }
 
-    setIsCategoryMutating(true);
-    try {
-      const response = await fetch(
-        `/api/categories/${activeCategoryRecord.id}`,
-        {
+      const nextSymbol = window.prompt(
+        `Set symbol for "${categoryRecord.name}" (leave empty to clear):`,
+        categoryRecord.symbol ?? "",
+      );
+      if (nextSymbol === null) {
+        return;
+      }
+
+      setIsCategoryMutating(true);
+      try {
+        const response = await fetch(`/api/categories/${categoryRecord.id}`, {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
@@ -731,123 +751,145 @@ export default function Page() {
           body: JSON.stringify({
             symbol: nextSymbol.trim() || null,
           }),
-        },
-      );
-      const payload = await readJson<CategoryResponse>(response);
-      if (!response.ok || !payload?.category) {
-        throw new Error(payload?.error ?? "Failed to update category symbol.");
-      }
-      const updatedCategory = payload.category;
+        });
+        const payload = await readJson<CategoryResponse>(response);
+        if (!response.ok || !payload?.category) {
+          throw new Error(payload?.error ?? "Failed to update category symbol.");
+        }
+        const updatedCategory = payload.category;
 
-      if (payload.mode) {
-        setDataMode(payload.mode);
-      }
-
-      setCategoryRecords((previous) =>
-        previous.map((category) =>
-          category.id === updatedCategory.id ? updatedCategory : category,
-        ),
-      );
-      toast.success("Category symbol updated", {
-        description: `${updatedCategory.name} now uses ${updatedCategory.symbol || "no symbol"}.`,
-      });
-    } catch (error) {
-      toast.error("Category symbol update failed", {
-        description:
-          error instanceof Error
-            ? error.message
-            : "Could not update category symbol.",
-      });
-    } finally {
-      setIsCategoryMutating(false);
-    }
-  }, [activeCategory, activeCategoryRecord, canManageResources]);
-
-  const handleDeleteActiveCategory = useCallback(async () => {
-    if (
-      !canManageResources ||
-      !activeCategoryRecord ||
-      activeCategory === "All"
-    ) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Delete category "${activeCategoryRecord.name}"? Resources in this category will be reassigned.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setIsCategoryMutating(true);
-
-    try {
-      const response = await fetch(
-        `/api/categories/${activeCategoryRecord.id}`,
-        {
-          method: "DELETE",
-        },
-      );
-      const payload = await readJson<DeleteCategoryResponse>(response);
-
-      if (
-        !response.ok ||
-        !payload?.deletedCategory ||
-        !payload?.reassignedCategory
-      ) {
-        throw new Error(payload?.error ?? "Failed to delete category.");
-      }
-
-      if (payload.mode) {
-        setDataMode(payload.mode);
-      }
-
-      setCategoryRecords((previous) => {
-        const withoutDeleted = previous.filter(
-          (category) => category.id !== payload.deletedCategory?.id,
-        );
-        const hasFallback = withoutDeleted.some(
-          (category) => category.id === payload.reassignedCategory?.id,
-        );
-
-        if (hasFallback || !payload.reassignedCategory) {
-          return withoutDeleted;
+        if (payload.mode) {
+          setDataMode(payload.mode);
         }
 
-        return [...withoutDeleted, payload.reassignedCategory];
-      });
+        setCategoryRecords((previous) =>
+          previous.map((category) =>
+            category.id === updatedCategory.id ? updatedCategory : category,
+          ),
+        );
+        toast.success("Category symbol updated", {
+          description: `${updatedCategory.name} now uses ${updatedCategory.symbol || "no symbol"}.`,
+        });
+      } catch (error) {
+        toast.error("Category symbol update failed", {
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not update category symbol.",
+        });
+      } finally {
+        setIsCategoryMutating(false);
+      }
+    },
+    [canManageResources, categoryRecordByLowerName],
+  );
 
-      const normalizedDeleted = payload.deletedCategory.name.toLowerCase();
-      setResources((previous) =>
-        previous.map((resource) =>
-          resource.category.toLowerCase() === normalizedDeleted
-            ? {
-                ...resource,
-                category: payload.reassignedCategory?.name ?? resource.category,
-              }
-            : resource,
-        ),
+  const handleDeleteCategoryByName = useCallback(
+    async (categoryName: string) => {
+      if (!canManageResources || categoryName === "All") {
+        return;
+      }
+
+      const categoryRecord =
+        categoryRecordByLowerName.get(categoryName.toLowerCase()) ?? null;
+      if (!categoryRecord) {
+        toast.error("Category not found", {
+          description: `Could not find "${categoryName}".`,
+        });
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Delete category "${categoryRecord.name}"? Resources in this category will be reassigned.`,
       );
+      if (!confirmed) {
+        return;
+      }
 
-      setActiveCategory("All");
-      void fetchCategories();
-      toast.success("Category deleted", {
-        description: `${payload.reassignedResources ?? 0} resource(s) reassigned to ${payload.reassignedCategory.name}.`,
-      });
-    } catch (error) {
-      toast.error("Category deletion failed", {
-        description:
-          error instanceof Error ? error.message : "Could not delete category.",
-      });
-    } finally {
-      setIsCategoryMutating(false);
+      setIsCategoryMutating(true);
+
+      try {
+        const response = await fetch(`/api/categories/${categoryRecord.id}`, {
+          method: "DELETE",
+        });
+        const payload = await readJson<DeleteCategoryResponse>(response);
+
+        if (
+          !response.ok ||
+          !payload?.deletedCategory ||
+          !payload?.reassignedCategory
+        ) {
+          throw new Error(payload?.error ?? "Failed to delete category.");
+        }
+
+        if (payload.mode) {
+          setDataMode(payload.mode);
+        }
+
+        setCategoryRecords((previous) => {
+          const withoutDeleted = previous.filter(
+            (category) => category.id !== payload.deletedCategory?.id,
+          );
+          const hasFallback = withoutDeleted.some(
+            (category) => category.id === payload.reassignedCategory?.id,
+          );
+
+          if (hasFallback || !payload.reassignedCategory) {
+            return withoutDeleted;
+          }
+
+          return [...withoutDeleted, payload.reassignedCategory];
+        });
+
+        const normalizedDeleted = payload.deletedCategory.name.toLowerCase();
+        setResources((previous) =>
+          previous.map((resource) =>
+            resource.category.toLowerCase() === normalizedDeleted
+              ? {
+                  ...resource,
+                  category:
+                    payload.reassignedCategory?.name ?? resource.category,
+                }
+              : resource,
+          ),
+        );
+
+        setActiveCategory((previous) =>
+          previous.toLowerCase() === normalizedDeleted ? "All" : previous,
+        );
+        void fetchCategories();
+        toast.success("Category deleted", {
+          description: `${payload.reassignedResources ?? 0} resource(s) reassigned to ${payload.reassignedCategory.name}.`,
+        });
+      } catch (error) {
+        toast.error("Category deletion failed", {
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not delete category.",
+        });
+      } finally {
+        setIsCategoryMutating(false);
+      }
+    },
+    [canManageResources, categoryRecordByLowerName, fetchCategories],
+  );
+
+  const handleUpdateActiveCategorySymbol = useCallback(async () => {
+    if (activeCategory === "All") {
+      return;
     }
-  }, [
-    activeCategory,
-    activeCategoryRecord,
-    canManageResources,
-    fetchCategories,
-  ]);
+
+    await handleUpdateCategorySymbolByName(activeCategory);
+  }, [activeCategory, handleUpdateCategorySymbolByName]);
+
+  const handleDeleteActiveCategory = useCallback(async () => {
+    if (activeCategory === "All") {
+      return;
+    }
+
+    await handleDeleteCategoryByName(activeCategory);
+  }, [activeCategory, handleDeleteCategoryByName]);
 
   const handleSignOut = useCallback(async () => {
     await signOut({ redirect: false });
@@ -1211,6 +1253,66 @@ export default function Page() {
     ],
   );
 
+  const readFirstUrlFromClipboard = useCallback(async (): Promise<string> => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+      throw new Error("Clipboard access is unavailable in this browser.");
+    }
+
+    const text = await navigator.clipboard.readText();
+    const url = extractFirstUrl(text);
+    if (!url) {
+      throw new Error("Clipboard does not contain a valid URL.");
+    }
+
+    return url;
+  }, []);
+
+  const handlePasteFromClipboardToTarget = useCallback(
+    async (target: PasteHoverTarget) => {
+      if (!canManageResources) {
+        toast.error("Admin access required", {
+          description:
+            "Only admins can paste links directly into cards or categories.",
+        });
+        return;
+      }
+
+      try {
+        const url = await readFirstUrlFromClipboard();
+        await handlePasteIntoHoverTarget(url, target);
+      } catch (error) {
+        toast.error("Clipboard paste failed", {
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not read a URL from your clipboard.",
+        });
+      }
+    },
+    [canManageResources, handlePasteIntoHoverTarget, readFirstUrlFromClipboard],
+  );
+
+  const handlePasteIntoCardFromClipboard = useCallback(
+    (resource: ResourceCard) => {
+      void handlePasteFromClipboardToTarget({
+        type: "card",
+        resourceId: resource.id,
+        category: resource.category,
+      });
+    },
+    [handlePasteFromClipboardToTarget],
+  );
+
+  const handlePasteIntoCategoryFromClipboard = useCallback(
+    (category: string | "All") => {
+      void handlePasteFromClipboardToTarget({
+        type: "category",
+        category,
+      });
+    },
+    [handlePasteFromClipboardToTarget],
+  );
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -1346,6 +1448,19 @@ export default function Page() {
     setEditingResource(resource);
     setModalOpen(true);
   }, []);
+
+  const handleOpenCreateResourceModal = useCallback(() => {
+    setEditingResource(null);
+    setModalOpen(true);
+  }, []);
+
+  const handleOpenCreateCategoryDialog = useCallback(() => {
+    setCreateCategoryDialogOpen(true);
+  }, []);
+
+  const handleRefreshLibrary = useCallback(() => {
+    void Promise.all([fetchResources(), fetchCategories()]);
+  }, [fetchCategories, fetchResources]);
 
   const handleModalOpenChange = useCallback((open: boolean) => {
     setModalOpen(open);
@@ -1501,7 +1616,7 @@ export default function Page() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCreateCategoryDialogOpen(true)}
+                  onClick={handleOpenCreateCategoryDialog}
                   disabled={isCategoryMutating}
                 >
                   <FolderPlus className="h-4 w-4" />
@@ -1546,10 +1661,7 @@ export default function Page() {
               </Button>
               {canManageResources ? (
                 <Button
-                  onClick={() => {
-                    setEditingResource(null);
-                    setModalOpen(true);
-                  }}
+                  onClick={handleOpenCreateResourceModal}
                   className="gap-2"
                   size="sm"
                   disabled={isLoading || Boolean(loadError)}
@@ -1591,6 +1703,15 @@ export default function Page() {
             onHoverCategoryChange={handleCategoryHoverChange}
             resourceCounts={resourceCounts}
             categorySymbols={categorySymbols}
+            canManageCategories={canManageResources}
+            onCreateCategory={handleOpenCreateCategoryDialog}
+            onEditCategorySymbol={(category) => {
+              void handleUpdateCategorySymbolByName(category);
+            }}
+            onDeleteCategory={(category) => {
+              void handleDeleteCategoryByName(category);
+            }}
+            onPasteIntoCategory={handlePasteIntoCategoryFromClipboard}
           />
           <div
             role="separator"
@@ -1621,91 +1742,151 @@ export default function Page() {
               onHoverCategoryChange={handleCategoryHoverChange}
               resourceCounts={resourceCounts}
               categorySymbols={categorySymbols}
+              canManageCategories={canManageResources}
+              onCreateCategory={handleOpenCreateCategoryDialog}
+              onEditCategorySymbol={(category) => {
+                void handleUpdateCategorySymbolByName(category);
+              }}
+              onDeleteCategory={(category) => {
+                void handleDeleteCategoryByName(category);
+              }}
+              onPasteIntoCategory={handlePasteIntoCategoryFromClipboard}
             />
           </SheetContent>
         </Sheet>
 
-        <main
-          className="flex-1 overflow-y-auto p-4 lg:p-6"
-          aria-label="Resource cards"
-        >
-          {isLoading ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-              <p className="text-sm text-muted-foreground">
-                Loading resources...
-              </p>
-            </div>
-          ) : loadError ? (
-            <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
-              <h2 className="text-lg font-semibold text-foreground">
-                Unable to load resources
-              </h2>
-              <p className="max-w-xl text-sm text-muted-foreground">
-                {loadError}
-              </p>
-              <Button onClick={() => void fetchResources()} size="sm">
-                Retry
-              </Button>
-            </div>
-          ) : filteredResources.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary text-muted-foreground">
-                <FolderOpen className="h-8 w-8" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">
-                  {searchQuery ? "No results found" : "No resources yet"}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {searchQuery
-                    ? `Nothing matches "${searchQuery}". Try a different search.`
-                    : canManageResources
-                      ? "Add your first resource to get started!"
-                      : isAuthenticated
-                        ? "You are signed in as read-only. Ask FirstAdmin for admin access."
-                        : "Sign in to request admin access and manage resources."}
-                </p>
-              </div>
-              {!searchQuery && canManageResources ? (
-                <Button
-                  onClick={() => {
-                    setEditingResource(null);
-                    setModalOpen(true);
-                  }}
-                  className="gap-2"
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <main
+              className="flex-1 overflow-y-auto p-4 lg:p-6"
+              aria-label="Resource cards"
+            >
+              {isLoading ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <p className="text-sm text-muted-foreground">
+                    Loading resources...
+                  </p>
+                </div>
+              ) : loadError ? (
+                <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
+                  <h2 className="text-lg font-semibold text-foreground">
+                    Unable to load resources
+                  </h2>
+                  <p className="max-w-xl text-sm text-muted-foreground">
+                    {loadError}
+                  </p>
+                  <Button onClick={() => void fetchResources()} size="sm">
+                    Retry
+                  </Button>
+                </div>
+              ) : filteredResources.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary text-muted-foreground">
+                    <FolderOpen className="h-8 w-8" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">
+                      {searchQuery ? "No results found" : "No resources yet"}
+                    </h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {searchQuery
+                        ? `Nothing matches "${searchQuery}". Try a different search.`
+                        : canManageResources
+                          ? "Add your first resource to get started!"
+                          : isAuthenticated
+                            ? "You are signed in as read-only. Ask FirstAdmin for admin access."
+                            : "Sign in to request admin access and manage resources."}
+                    </p>
+                  </div>
+                  {!searchQuery && canManageResources ? (
+                    <Button
+                      onClick={handleOpenCreateResourceModal}
+                      className="gap-2"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add Resource
+                    </Button>
+                  ) : null}
+                  {!searchQuery && !isAuthenticated ? (
+                    <Button
+                      onClick={() => openAuthDialog("login")}
+                      className="gap-2"
+                    >
+                      <LogIn className="h-4 w-4" />
+                      Sign in
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {filteredResources.map((resource) => (
+                    <ResourceCardItem
+                      key={resource.id}
+                      resource={resource}
+                      categorySymbol={categorySymbols[resource.category]}
+                      onDelete={handleDelete}
+                      onEdit={handleEdit}
+                      onPasteLinkIntoCard={handlePasteIntoCardFromClipboard}
+                      onHoverChange={handleCardHoverChange}
+                      isDeleting={deletingResourceId === resource.id}
+                      canManage={canManageResources}
+                    />
+                  ))}
+                </div>
+              )}
+            </main>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-64">
+            <ContextMenuLabel>Library Actions</ContextMenuLabel>
+            <ContextMenuSeparator />
+            {canManageResources ? (
+              <>
+                <ContextMenuItem
+                  disabled={isLoading || Boolean(loadError)}
+                  onSelect={handleOpenCreateResourceModal}
                 >
-                  <Plus className="h-4 w-4" />
-                  Add Resource
-                </Button>
-              ) : null}
-              {!searchQuery && !isAuthenticated ? (
-                <Button
-                  onClick={() => openAuthDialog("login")}
-                  className="gap-2"
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add resource card
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={handleOpenCreateCategoryDialog}>
+                  <FolderPlus className="mr-2 h-4 w-4" />
+                  Create category
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onSelect={() =>
+                    handlePasteIntoCategoryFromClipboard(activeCategory)
+                  }
                 >
-                  <LogIn className="h-4 w-4" />
-                  Sign in
-                </Button>
-              ) : null}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-              {filteredResources.map((resource) => (
-                <ResourceCardItem
-                  key={resource.id}
-                  resource={resource}
-                  categorySymbol={categorySymbols[resource.category]}
-                  onDelete={handleDelete}
-                  onEdit={handleEdit}
-                  onHoverChange={handleCardHoverChange}
-                  isDeleting={deletingResourceId === resource.id}
-                  canManage={canManageResources}
-                />
-              ))}
-            </div>
-          )}
-        </main>
+                  <ClipboardPaste className="mr-2 h-4 w-4" />
+                  Paste URL into{" "}
+                  {activeCategory === "All"
+                    ? "a suggested category"
+                    : activeCategory}
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+              </>
+            ) : null}
+            <ContextMenuItem
+              disabled={searchQuery.trim().length === 0}
+              onSelect={() => setSearchQuery("")}
+            >
+              <FilterX className="mr-2 h-4 w-4" />
+              Clear search
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={activeCategory === "All"}
+              onSelect={() => setActiveCategory("All")}
+            >
+              <FilterX className="mr-2 h-4 w-4" />
+              Show all categories
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={handleRefreshLibrary}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Refresh library
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
       </div>
 
       <Dialog

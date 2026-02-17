@@ -17,3 +17,4 @@ certs/
 # Electron build outputs
 dist/
 dist-electron/
+CLAUDE.md

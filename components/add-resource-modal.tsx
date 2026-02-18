@@ -1,7 +1,8 @@
 "use client"
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
+import type { PastedLinkDraft } from "@/lib/link-paste"
 import { DEFAULT_CATEGORY_SUGGESTIONS } from "@/lib/resources"
 import type { ResourceCard, ResourceInput } from "@/lib/resources"
 import {
@@ -29,6 +30,7 @@ interface AddResourceModalProps {
   onOpenChange: (open: boolean) => void
   onSave: (resource: ResourceInput) => Promise<void>
   editingResource?: ResourceCard | null
+  initialLink?: PastedLinkDraft | null
   isSaving?: boolean
   categorySuggestions?: string[]
 }
@@ -38,6 +40,7 @@ export function AddResourceModal({
   onOpenChange,
   onSave,
   editingResource,
+  initialLink,
   isSaving = false,
   categorySuggestions = [],
 }: AddResourceModalProps) {
@@ -48,6 +51,7 @@ export function AddResourceModal({
   const [links, setLinks] = useState<LinkInput[]>([
     { url: "", label: "", note: "" },
   ])
+  const hasInitializedForCurrentOpenRef = useRef(false)
 
   const categoryOptions = useMemo(() => {
     const unique = new Set<string>()
@@ -73,6 +77,15 @@ export function AddResourceModal({
   const initFromEditing = useCallback(() => {
     if (!editingResource) {
       resetForm()
+      if (initialLink?.url.trim()) {
+        setLinks([
+          {
+            url: initialLink.url.trim(),
+            label: initialLink.label.trim(),
+            note: initialLink.note.trim(),
+          },
+        ])
+      }
       return
     }
 
@@ -93,15 +106,23 @@ export function AddResourceModal({
     )
     setTags([...(editingResource.tags ?? [])])
     setTagDraft("")
-  }, [categoryOptions, editingResource, resetForm])
+  }, [categoryOptions, editingResource, initialLink, resetForm])
 
   const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) {
-      initFromEditing()
-    }
-
     onOpenChange(nextOpen)
   }
+
+  useEffect(() => {
+    if (open) {
+      if (!hasInitializedForCurrentOpenRef.current) {
+        initFromEditing()
+        hasInitializedForCurrentOpenRef.current = true
+      }
+      return
+    }
+
+    hasInitializedForCurrentOpenRef.current = false
+  }, [initFromEditing, open])
 
   const addLink = () => {
     setLinks((prev) => [...prev, { url: "", label: "", note: "" }])

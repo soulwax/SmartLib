@@ -10,6 +10,13 @@ import {
   deriveUserRole,
   hasAdminAccess,
 } from "@/lib/authorization";
+import {
+  buildLinkDraftFromUrl,
+  normalizeDraftLabel,
+  normalizeDraftNote,
+  normalizeHttpUrl,
+  type PastedLinkDraft,
+} from "@/lib/link-paste";
 import { cn } from "@/lib/utils";
 import type {
   ResourceCard,
@@ -58,6 +65,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   BookOpen,
+  ClipboardPaste,
   FilterX,
   FolderOpen,
   FolderPlus,
@@ -122,6 +130,19 @@ interface CategoryResponse extends ApiErrorResponse {
 interface CategoryNameSuggestionResponse extends ApiErrorResponse {
   suggestedName?: string;
   analyzedLinks?: number;
+  model?: string;
+}
+
+type AiPastePromptDecision = "accepted" | "declined";
+
+interface AiPastePreferenceResponse extends ApiErrorResponse {
+  decision?: AiPastePromptDecision | null;
+}
+
+interface LinkSuggestionResponse extends ApiErrorResponse {
+  url?: string;
+  label?: string;
+  note?: string;
   model?: string;
 }
 
@@ -312,6 +333,19 @@ export default function Page() {
   const [activeCategory, setActiveCategory] = useState<string | "All">("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [initialLinkDraft, setInitialLinkDraft] =
+    useState<PastedLinkDraft | null>(null);
+  const [clipboardUrlForPaste, setClipboardUrlForPaste] = useState<
+    string | null
+  >(null);
+  const [aiPastePromptDecision, setAiPastePromptDecision] =
+    useState<AiPastePromptDecision | null>(null);
+  const [isAiPastePreferenceLoading, setIsAiPastePreferenceLoading] =
+    useState(false);
+  const [isAiPastePreferenceSaving, setIsAiPastePreferenceSaving] =
+    useState(false);
+  const [aiPastePromptOpen, setAiPastePromptOpen] = useState(false);
+  const [pendingPasteUrl, setPendingPasteUrl] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [desktopSidebarWidth, setDesktopSidebarWidth] = useState<number>(
     clampDesktopSidebarWidth(DESKTOP_SIDEBAR_DEFAULT_WIDTH),
@@ -439,6 +473,249 @@ export default function Page() {
       }));
     },
     [],
+  );
+
+  const fetchAiPastePreference = useCallback(async () => {
+    if (!sessionUserId) {
+      setAiPastePromptDecision(null);
+      return null;
+    }
+
+    setIsAiPastePreferenceLoading(true);
+    try {
+      const response = await fetch("/api/preferences/ai-paste", {
+        cache: "no-store",
+      });
+      const payload = await readJson<AiPastePreferenceResponse>(response);
+      if (!response.ok) {
+        throw new Error(
+          payload?.error ?? "Failed to load AI paste preference.",
+        );
+      }
+
+      const decision =
+        payload?.decision === "accepted" || payload?.decision === "declined"
+          ? payload.decision
+          : null;
+      setAiPastePromptDecision(decision);
+      return decision;
+    } catch (error) {
+      console.error("Failed to fetch AI paste preference:", error);
+      setAiPastePromptDecision(null);
+      return null;
+    } finally {
+      setIsAiPastePreferenceLoading(false);
+    }
+  }, [sessionUserId]);
+
+  const saveAiPastePreference = useCallback(
+    async (decision: AiPastePromptDecision) => {
+      if (!sessionUserId) {
+        setAiPastePromptDecision(decision);
+        return;
+      }
+
+      setIsAiPastePreferenceSaving(true);
+      try {
+        const response = await fetch("/api/preferences/ai-paste", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ decision }),
+        });
+        const payload = await readJson<AiPastePreferenceResponse>(response);
+        if (!response.ok) {
+          throw new Error(
+            payload?.error ?? "Failed to save AI paste preference.",
+          );
+        }
+
+        setAiPastePromptDecision(decision);
+      } catch (error) {
+        setAiPastePromptDecision(decision);
+        toast.error("Could not save AI preference", {
+          description:
+            error instanceof Error
+              ? `${error.message} Keeping this choice for this session.`
+              : "Keeping this choice for this session.",
+        });
+      } finally {
+        setIsAiPastePreferenceSaving(false);
+      }
+    },
+    [sessionUserId],
+  );
+
+  const readClipboardUrl = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+      setClipboardUrlForPaste(null);
+      return null;
+    }
+
+    try {
+      const rawClipboard = await navigator.clipboard.readText();
+      const url = normalizeHttpUrl(rawClipboard);
+      setClipboardUrlForPaste(url);
+      return url;
+    } catch {
+      setClipboardUrlForPaste(null);
+      return null;
+    }
+  }, []);
+
+  const buildLinkDraftForPaste = useCallback(
+    async (url: string, useAi: boolean): Promise<PastedLinkDraft> => {
+      const fallback = buildLinkDraftFromUrl(url);
+      if (!useAi) {
+        return fallback;
+      }
+
+      try {
+        const response = await fetch("/api/links/suggest-from-url", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ url: fallback.url }),
+        });
+        const payload = await readJson<LinkSuggestionResponse>(response);
+        if (!response.ok) {
+          throw new Error(
+            payload?.error ?? "Failed to fetch AI paste suggestion.",
+          );
+        }
+
+        return {
+          url: normalizeHttpUrl(payload?.url ?? "") ?? fallback.url,
+          label: normalizeDraftLabel(payload?.label ?? fallback.label),
+          note: normalizeDraftNote(payload?.note ?? fallback.note),
+        };
+      } catch (error) {
+        toast.error("AI paste fallback", {
+          description:
+            error instanceof Error
+              ? `${error.message} Using standard paste fields instead.`
+              : "Using standard paste fields instead.",
+        });
+        return fallback;
+      }
+    },
+    [],
+  );
+
+  const openCreateModalFromPastedUrl = useCallback(
+    async (url: string, useAi: boolean) => {
+      const draft = await buildLinkDraftForPaste(url, useAi);
+      setEditingResource(null);
+      setInitialLinkDraft(draft);
+      setModalOpen(true);
+    },
+    [buildLinkDraftForPaste],
+  );
+
+  const handlePasteFromClipboard = useCallback(async () => {
+    if (!canManageResources) {
+      toast.error("Insufficient permissions", {
+        description: "You do not have access to create resource cards.",
+      });
+      return;
+    }
+
+    if (!activeWorkspaceId) {
+      toast.error("Workspace unavailable", {
+        description: "Select a workspace before pasting a link.",
+      });
+      return;
+    }
+
+    const pastedUrl = clipboardUrlForPaste ?? (await readClipboardUrl());
+    if (!pastedUrl) {
+      toast.error("No valid URL in clipboard", {
+        description: "Copy an http(s) URL first, then right-click again.",
+      });
+      return;
+    }
+
+    if (canUseAiFeatures) {
+      await openCreateModalFromPastedUrl(pastedUrl, true);
+      return;
+    }
+
+    let decision = aiPastePromptDecision;
+    if (decision === null && !isAiPastePreferenceLoading) {
+      decision = await fetchAiPastePreference();
+    }
+
+    if (decision === null && isAuthenticated) {
+      setPendingPasteUrl(pastedUrl);
+      setAiPastePromptOpen(true);
+      return;
+    }
+
+    if (decision === "accepted") {
+      updateGeneralSetting("aiFeaturesEnabled", true);
+      await openCreateModalFromPastedUrl(pastedUrl, true);
+      return;
+    }
+
+    await openCreateModalFromPastedUrl(pastedUrl, false);
+  }, [
+    activeWorkspaceId,
+    aiPastePromptDecision,
+    canManageResources,
+    canUseAiFeatures,
+    clipboardUrlForPaste,
+    fetchAiPastePreference,
+    isAiPastePreferenceLoading,
+    isAuthenticated,
+    openCreateModalFromPastedUrl,
+    readClipboardUrl,
+    updateGeneralSetting,
+  ]);
+
+  const handleAiPastePromptChoice = useCallback(
+    async (decision: AiPastePromptDecision) => {
+      if (!pendingPasteUrl || isAiPastePreferenceSaving) {
+        return;
+      }
+
+      const url = pendingPasteUrl;
+      await saveAiPastePreference(decision);
+      setAiPastePromptOpen(false);
+      setPendingPasteUrl(null);
+
+      if (decision === "accepted") {
+        updateGeneralSetting("aiFeaturesEnabled", true);
+        await openCreateModalFromPastedUrl(url, true);
+        return;
+      }
+
+      await openCreateModalFromPastedUrl(url, false);
+    },
+    [
+      isAiPastePreferenceSaving,
+      openCreateModalFromPastedUrl,
+      pendingPasteUrl,
+      saveAiPastePreference,
+      updateGeneralSetting,
+    ],
+  );
+
+  const handleLibraryContextMenuOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        setClipboardUrlForPaste(null);
+        return;
+      }
+
+      if (!canManageResources) {
+        return;
+      }
+
+      void readClipboardUrl();
+    },
+    [canManageResources, readClipboardUrl],
   );
 
   const canManageResourceCard = useCallback(
@@ -901,6 +1178,17 @@ export default function Page() {
       JSON.stringify(generalSettings),
     );
   }, [generalSettings]);
+
+  useEffect(() => {
+    if (!sessionUserId) {
+      setAiPastePromptDecision(null);
+      setAiPastePromptOpen(false);
+      setPendingPasteUrl(null);
+      return;
+    }
+
+    void fetchAiPastePreference();
+  }, [fetchAiPastePreference, sessionUserId]);
 
   useEffect(() => {
     if (activeCategory !== "All" && !categories.includes(activeCategory)) {
@@ -1971,6 +2259,7 @@ export default function Page() {
         return;
       }
 
+      setInitialLinkDraft(null);
       setEditingResource(resource);
       setModalOpen(true);
     },
@@ -1992,6 +2281,7 @@ export default function Page() {
       return;
     }
 
+    setInitialLinkDraft(null);
     setEditingResource(null);
     setModalOpen(true);
   }, [activeWorkspaceId, canManageResources]);
@@ -2114,6 +2404,7 @@ export default function Page() {
   const handleModalOpenChange = useCallback((open: boolean) => {
     setModalOpen(open);
     if (!open) {
+      setInitialLinkDraft(null);
       setEditingResource(null);
     }
   }, []);
@@ -2617,7 +2908,7 @@ export default function Page() {
           </SheetContent>
         </Sheet>
 
-        <ContextMenu>
+        <ContextMenu onOpenChange={handleLibraryContextMenuOpenChange}>
           <ContextMenuTrigger asChild>
             <main
               className="flex-1 overflow-y-auto p-4 lg:p-6"
@@ -2835,6 +3126,17 @@ export default function Page() {
                   <Plus className="mr-2 h-4 w-4" />
                   Add resource card
                 </ContextMenuItem>
+                {clipboardUrlForPaste ? (
+                  <ContextMenuItem
+                    disabled={!activeWorkspaceId}
+                    onSelect={() => {
+                      void handlePasteFromClipboard();
+                    }}
+                  >
+                    <ClipboardPaste className="mr-2 h-4 w-4" />
+                    Paste URL from clipboard
+                  </ContextMenuItem>
+                ) : null}
               </>
             ) : null}
             {canManageCategories ? (
@@ -2870,6 +3172,52 @@ export default function Page() {
           </ContextMenuContent>
         </ContextMenu>
       </div>
+
+      <Dialog
+        open={aiPastePromptOpen}
+        onOpenChange={(open) => {
+          if (isAiPastePreferenceSaving) {
+            return;
+          }
+
+          setAiPastePromptOpen(open);
+          if (!open) {
+            setPendingPasteUrl(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Enable AI for Paste?</DialogTitle>
+            <DialogDescription>
+              AI can generate a cleaner label and short description for pasted
+              URLs. This prompt appears only once.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isAiPastePreferenceSaving}
+              onClick={() => {
+                void handleAiPastePromptChoice("declined");
+              }}
+            >
+              No
+            </Button>
+            <Button
+              type="button"
+              disabled={isAiPastePreferenceSaving}
+              onClick={() => {
+                void handleAiPastePromptChoice("accepted");
+              }}
+            >
+              {isAiPastePreferenceSaving ? "Saving..." : "Yes"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={generalSettingsOpen} onOpenChange={setGeneralSettingsOpen}>
         <DialogContent className="sm:max-w-sm">
@@ -3476,6 +3824,7 @@ export default function Page() {
         onOpenChange={handleModalOpenChange}
         onSave={handleSave}
         editingResource={editingResource}
+        initialLink={initialLinkDraft}
         isSaving={isSaving}
         categorySuggestions={categories}
       />

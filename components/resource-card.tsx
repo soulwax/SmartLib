@@ -42,6 +42,7 @@ function ResourceLinkCompactItem({
   url,
   faviconUrl,
   openInSameTab = false,
+  onOpen,
 }: {
   linkId: string
   label: string
@@ -49,6 +50,7 @@ function ResourceLinkCompactItem({
   url: string
   faviconUrl?: string | null
   openInSameTab?: boolean
+  onOpen?: () => void
 }) {
   const hostname = useMemo(() => hostnameFromUrl(url), [url])
 
@@ -60,6 +62,12 @@ function ResourceLinkCompactItem({
           target={openInSameTab ? "_self" : "_blank"}
           rel={openInSameTab ? undefined : "noopener noreferrer"}
           data-resource-link-id={linkId}
+          onClick={() => onOpen?.()}
+          onAuxClick={(event) => {
+            if (event.button === 1) {
+              onOpen?.()
+            }
+          }}
           className="group/link flex items-start gap-2 rounded-md border border-border/70 bg-secondary/20 p-2 transition-colors hover:border-primary/30 hover:bg-secondary/40"
         >
           <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/70 bg-background">
@@ -109,6 +117,16 @@ interface ResourceCardProps {
   categorySymbol?: string | null
   onDelete: (id: string) => void
   onEdit: (resource: ResourceCard) => void
+  onOpenLink?: (payload: {
+    resourceId: string
+    workspaceId: string
+    category: string
+    linkId: string
+    label: string
+    url: string
+    note?: string | null
+    faviconUrl?: string | null
+  }) => void
   canEditCategory?: boolean
   onEditCategory?: (category: string) => void
   isDeleting?: boolean
@@ -121,6 +139,7 @@ export function ResourceCardItem({
   categorySymbol,
   onDelete,
   onEdit,
+  onOpenLink,
   canEditCategory = false,
   onEditCategory,
   isDeleting = false,
@@ -158,6 +177,28 @@ export function ResourceCardItem({
 
     window.open(url, "_blank", "noopener,noreferrer")
   }, [])
+
+  const trackOpenedLink = useCallback(
+    (link: {
+      id: string
+      label: string
+      url: string
+      note?: string | null
+      faviconUrl?: string | null
+    }) => {
+      onOpenLink?.({
+        resourceId: resource.id,
+        workspaceId: resource.workspaceId,
+        category: resource.category,
+        linkId: link.id,
+        label: link.label,
+        url: link.url,
+        note: link.note,
+        faviconUrl: link.faviconUrl,
+      })
+    },
+    [onOpenLink, resource.category, resource.id, resource.workspaceId],
+  )
 
   const handleContextMenuCapture = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -270,6 +311,7 @@ export function ResourceCardItem({
                   url={link.url}
                   faviconUrl={link.faviconUrl}
                   openInSameTab={openLinksInSameTab}
+                  onOpen={() => trackOpenedLink(link)}
                 />
               </li>
             ))}
@@ -285,7 +327,12 @@ export function ResourceCardItem({
 
         {selectedContextLink ? (
           <>
-            <ContextMenuItem onSelect={() => openInNewTab(selectedContextLink.url)}>
+            <ContextMenuItem
+              onSelect={() => {
+                trackOpenedLink(selectedContextLink)
+                openInNewTab(selectedContextLink.url)
+              }}
+            >
               <ExternalLink className="mr-2 h-4 w-4" />
               Open link in new tab
             </ContextMenuItem>
@@ -318,6 +365,7 @@ export function ResourceCardItem({
                 if (!firstLink) {
                   return
                 }
+                trackOpenedLink(firstLink)
                 openInNewTab(firstLink.url)
               }}
             >

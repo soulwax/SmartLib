@@ -265,6 +265,29 @@ export const colorSchemePreferences = pgTable(
   ]
 )
 
+export const aiPastePreferences = pgTable(
+  "ai_paste_preferences",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => appUsers.id, { onDelete: "cascade" }),
+    decision: text("decision").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      "ai_paste_preferences_decision_check",
+      sql`${table.decision} IN ('accepted', 'declined')`
+    ),
+    index("ai_paste_preferences_updated_at_idx").on(table.updatedAt),
+  ]
+)
+
 export const resourceAuditLogs = pgTable(
   "resource_audit_logs",
   {

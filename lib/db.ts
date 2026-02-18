@@ -519,6 +519,20 @@ export async function ensureSchema() {
     `;
 
     await sql`
+      CREATE TABLE IF NOT EXISTS ai_paste_preferences (
+        user_id UUID PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+        decision TEXT NOT NULL CHECK (decision IN ('accepted', 'declined')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS ai_paste_preferences_updated_at_idx
+      ON ai_paste_preferences (updated_at DESC)
+    `;
+
+    await sql`
       CREATE TABLE IF NOT EXISTS resource_audit_logs (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         resource_id UUID NOT NULL REFERENCES resource_cards(id) ON DELETE CASCADE,

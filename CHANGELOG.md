@@ -34,6 +34,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Import path for route type definitions in `next-env.d.ts`
 - `onlyBuiltDependencies` configuration added for `sharp` in `package.json`
 
+## [0.1.6] - 2026-02-18
+
+### Added
+
+- Right-click library action `Paste URL from clipboard`, shown only when clipboard currently contains a valid `http(s)` URL
+- AI paste suggestion endpoint for URL enrichment (`label` + short `note`) before opening the add-resource modal
+- Database-backed AI paste prompt preference (`accepted` / `declined`) with new API routes and repository support
+
+### Changed
+
+- Paste flow now supports one-time `Enable AI for Paste?` choice (`Yes`/`No`) and remembers that choice for signed-in users
+- Add resource modal now supports opening with a prefilled initial link draft from clipboard paste actions
+
+### Fixed
+
+- Paste workflow now gracefully falls back to non-AI link metadata when AI is unavailable or suggestion requests fail
+
 ## [0.1.5] - 2026-02-18
 
 ### Added

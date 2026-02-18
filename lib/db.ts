@@ -415,6 +415,95 @@ export async function ensureSchema() {
     `;
 
     await sql`
+      ALTER TABLE resource_cards
+      ADD COLUMN IF NOT EXISTS category_id UUID
+    `;
+
+    await sql`
+      ALTER TABLE resource_cards
+      ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0
+    `;
+
+    await sql`
+      UPDATE resource_cards AS card
+      SET category_id = category_rows.id
+      FROM (
+        SELECT
+          cat.id,
+          cat.workspace_id,
+          lower(regexp_replace(btrim(cat.name), '[[:space:]]+', ' ', 'g')) AS normalized_name
+        FROM resource_categories AS cat
+      ) AS category_rows
+      WHERE
+        card.category_id IS NULL
+        AND card.workspace_id = category_rows.workspace_id
+        AND lower(regexp_replace(btrim(card.category), '[[:space:]]+', ' ', 'g')) =
+            category_rows.normalized_name
+    `;
+
+    await sql`
+      UPDATE resource_cards AS card
+      SET
+        category_id = fallback_category.id,
+        category = fallback_category.name,
+        updated_at = NOW()
+      FROM (
+        SELECT
+          cat.id,
+          cat.workspace_id,
+          cat.name
+        FROM resource_categories AS cat
+        WHERE lower(cat.name) = lower('General')
+      ) AS fallback_category
+      WHERE
+        card.category_id IS NULL
+        AND card.workspace_id = fallback_category.workspace_id
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS resource_cards_category_id_idx
+      ON resource_cards (category_id)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS resource_cards_workspace_category_sort_idx
+      ON resource_cards (workspace_id, category_id, sort_order)
+      WHERE deleted_at IS NULL
+    `;
+
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'resource_cards_sort_order_check'
+        ) THEN
+          ALTER TABLE resource_cards
+          ADD CONSTRAINT resource_cards_sort_order_check
+          CHECK (sort_order >= 0);
+        END IF;
+      END $$;
+    `;
+
+    await sql`
+      WITH ranked AS (
+        SELECT
+          card.id,
+          row_number() OVER (
+            PARTITION BY card.workspace_id, card.category_id
+            ORDER BY card.created_at ASC, card.id ASC
+          ) AS row_num
+        FROM resource_cards AS card
+        WHERE card.sort_order = 0
+      )
+      UPDATE resource_cards AS card
+      SET sort_order = ranked.row_num * 1024
+      FROM ranked
+      WHERE card.id = ranked.id
+    `;
+
+    await sql`
       DO $$
       BEGIN
         IF NOT EXISTS (
@@ -427,6 +516,23 @@ export async function ensureSchema() {
           FOREIGN KEY (workspace_id)
           REFERENCES resource_workspaces(id)
           ON DELETE CASCADE;
+        END IF;
+      END $$;
+    `;
+
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'resource_cards_category_id_resource_categories_id_fk'
+        ) THEN
+          ALTER TABLE resource_cards
+          ADD CONSTRAINT resource_cards_category_id_resource_categories_id_fk
+          FOREIGN KEY (category_id)
+          REFERENCES resource_categories(id)
+          ON DELETE SET NULL;
         END IF;
       END $$;
     `;

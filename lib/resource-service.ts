@@ -16,6 +16,7 @@ import {
   listMockResourcesIncludingDeleted,
   listMockResourceWorkspaces,
   listMockResources,
+  moveMockResourceItem,
   renameMockResourceWorkspace,
   updateMockResourceCategory,
   restoreMockResource,
@@ -35,6 +36,7 @@ import {
   listResourcesIncludingDeleted as listDbResourcesIncludingDeleted,
   listResourceWorkspaces as listDbResourceWorkspaces,
   listResources as listDbResources,
+  moveResourceItem as moveDbResourceItem,
   mergeDuplicateResourceCategories as mergeDbDuplicateResourceCategories,
   renameResourceWorkspace as renameDbResourceWorkspace,
   updateResourceCategory as updateDbResourceCategory,
@@ -42,6 +44,8 @@ import {
   updateResource as updateDbResource,
 } from "@/lib/resource-repository"
 import type {
+  MoveResourceItemInput,
+  MoveResourceItemResult,
   ResourceAuditActor,
   ResourceAuditLogEntry,
   ResourceCard,
@@ -389,6 +393,29 @@ export async function updateResourceService(
       includeAllWorkspaces: options?.includeAllWorkspaces,
     }),
   }
+}
+
+export async function moveResourceItemService(
+  input: MoveResourceItemInput,
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+): Promise<{ mode: ResourceDataMode } & MoveResourceItemResult> {
+  const mode = currentMode()
+
+  if (mode === "database") {
+    await ensureDatabaseBootstrapped()
+
+    const result = await moveDbResourceItem(input, {
+      actorUserId: options?.actorUserId ?? null,
+      includeAllWorkspaces: options?.includeAllWorkspaces,
+    })
+    return { mode, ...result }
+  }
+
+  const result = await moveMockResourceItem(input, {
+    actorUserId: options?.actorUserId ?? null,
+    includeAllWorkspaces: options?.includeAllWorkspaces,
+  })
+  return { mode, ...result }
 }
 
 export async function deleteResourceService(

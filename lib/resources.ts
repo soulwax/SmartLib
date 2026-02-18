@@ -9,7 +9,9 @@ export interface ResourceLink {
 export interface ResourceCard {
   id: string
   workspaceId: string
+  categoryId?: string | null
   category: string
+  order?: number
   ownerUserId: string | null
   tags: string[]
   links: ResourceLink[]
@@ -63,6 +65,25 @@ export interface ResourceInput {
   category: string
   tags: string[]
   links: ResourceLinkInput[]
+}
+
+export interface MoveResourceItemInput {
+  itemId: string
+  sourceCategoryId: string
+  targetCategoryId: string
+  newOrder: number
+}
+
+export interface MoveResourceItemPatch {
+  id: string
+  categoryId: string
+  category: string
+  order: number
+}
+
+export interface MoveResourceItemResult {
+  item: ResourceCard
+  affectedItems: MoveResourceItemPatch[]
 }
 
 export const DEFAULT_CATEGORY_SUGGESTIONS = [

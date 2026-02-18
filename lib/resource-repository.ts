@@ -35,6 +35,9 @@ import {
   uniqueHostnames,
 } from "@/lib/favicon-service";
 import type {
+  MoveResourceItemInput,
+  MoveResourceItemPatch,
+  MoveResourceItemResult,
   ResourceAuditAction,
   ResourceAuditActor,
   ResourceAuditLogEntry,
@@ -48,6 +51,7 @@ const MAIN_RESOURCE_WORKSPACE_NAME = "Main Workspace";
 const DEFAULT_RESOURCE_CATEGORY_NAME = "General";
 const FALLBACK_RESOURCE_CATEGORY_NAME = "Uncategorized";
 const WORKSPACE_OWNER_SENTINEL_UUID = "00000000-0000-0000-0000-000000000000";
+const RESOURCE_ORDER_STEP = 1024;
 
 export class ResourceNotFoundError extends Error {
   constructor(id: string) {
@@ -91,6 +95,13 @@ export class ResourceWorkspaceLimitReachedError extends Error {
   }
 }
 
+export class ResourceMoveConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResourceMoveConflictError";
+  }
+}
+
 interface ResourceWorkspaceRow {
   id: string;
   name: string;
@@ -116,7 +127,9 @@ interface ResourceCategoryWithWorkspaceOwnerRow extends ResourceCategoryRow {
 interface ResourceJoinRow {
   resourceId: string;
   resourceWorkspaceId: string;
+  resourceCategoryId: string | null;
   resourceCategory: string;
+  resourceSortOrder: number;
   resourceOwnerUserId: string | null;
   resourceDeletedAt: Date | string | null;
   resourceCreatedAt: Date | string | null;
@@ -192,6 +205,14 @@ function normalizeTimestampToMs(value: Date | string | null | undefined): number
 
 function normalizeTagName(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 40);
+}
+
+function normalizeSortOrder(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 function normalizeAuditAction(value: string): ResourceAuditAction {
@@ -379,7 +400,9 @@ function mapRowsToResources(rows: ResourceJoinRow[]): ResourceCard[] {
       resource = {
         id: row.resourceId,
         workspaceId: row.resourceWorkspaceId,
+        categoryId: row.resourceCategoryId,
         category: row.resourceCategory,
+        order: normalizeSortOrder(row.resourceSortOrder),
         ownerUserId: row.resourceOwnerUserId,
         tags: [],
         deletedAt: normalizeTimestamp(row.resourceDeletedAt),
@@ -401,6 +424,87 @@ function mapRowsToResources(rows: ResourceJoinRow[]): ResourceCard[] {
   }
 
   return orderedResources;
+}
+
+async function getNextSortOrderForCategory(
+  workspaceId: string,
+  categoryId: string,
+  dbClient: ReturnType<typeof getDb> | any = getDb(),
+): Promise<number> {
+  const rows = await dbClient
+    .select({
+      sortOrder: resourceCards.sortOrder,
+    })
+    .from(resourceCards)
+    .where(
+      and(
+        eq(resourceCards.workspaceId, workspaceId),
+        eq(resourceCards.categoryId, categoryId),
+        isNull(resourceCards.deletedAt),
+      ),
+    )
+    .orderBy(desc(resourceCards.sortOrder))
+    .limit(1);
+
+  const maxOrder = normalizeSortOrder(rows[0]?.sortOrder ?? 0);
+  return maxOrder + RESOURCE_ORDER_STEP;
+}
+
+async function rebalanceCategoryOrders(
+  workspaceId: string,
+  categoryId: string,
+  dbClient: ReturnType<typeof getDb> | any = getDb(),
+): Promise<MoveResourceItemPatch[]> {
+  const rows = await dbClient
+    .select({
+      id: resourceCards.id,
+      category: resourceCards.category,
+      sortOrder: resourceCards.sortOrder,
+      createdAt: resourceCards.createdAt,
+    })
+    .from(resourceCards)
+    .where(
+      and(
+        eq(resourceCards.workspaceId, workspaceId),
+        eq(resourceCards.categoryId, categoryId),
+        isNull(resourceCards.deletedAt),
+      ),
+    )
+    .orderBy(
+      asc(resourceCards.sortOrder),
+      asc(resourceCards.createdAt),
+      asc(resourceCards.id),
+    );
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const updates: MoveResourceItemPatch[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const nextOrder = (index + 1) * RESOURCE_ORDER_STEP;
+    if (normalizeSortOrder(row.sortOrder) === nextOrder) {
+      continue;
+    }
+
+    await dbClient
+      .update(resourceCards)
+      .set({
+        sortOrder: nextOrder,
+        updatedAt: sql`NOW()`,
+      })
+      .where(eq(resourceCards.id, row.id));
+
+    updates.push({
+      id: row.id,
+      categoryId,
+      category: row.category,
+      order: nextOrder,
+    });
+  }
+
+  return updates;
 }
 
 async function listTagsForResourceIds(
@@ -507,7 +611,9 @@ async function findResourceById(
     .select({
       resourceId: resourceCards.id,
       resourceWorkspaceId: resourceCards.workspaceId,
+      resourceCategoryId: resourceCards.categoryId,
       resourceCategory: resourceCards.category,
+      resourceSortOrder: resourceCards.sortOrder,
       resourceOwnerUserId: resourceCards.ownerUserId,
       resourceDeletedAt: resourceCards.deletedAt,
       resourceCreatedAt: resourceCards.createdAt,
@@ -844,6 +950,7 @@ async function mergeCategoriesInWorkspaceByNormalizedName(
         .filter((key) => key.length > 0),
     ]),
   ];
+  const matchingCategoryIds = matchingRows.map((category) => category.id);
   const resourceCategoryMatchCondition =
     normalizedCategoryKeys.length === 1
       ? sql`${normalizedCategorySql(resourceCards.category)} = ${normalizedCategoryKeys[0]}`
@@ -851,6 +958,10 @@ async function mergeCategoriesInWorkspaceByNormalizedName(
           normalizedCategoryKeys.map((key) => sql`${key}`),
           sql`, `,
         )})`;
+  const resourceCategoryIdMatchCondition =
+    matchingCategoryIds.length === 1
+      ? eq(resourceCards.categoryId, matchingCategoryIds[0])
+      : inArray(resourceCards.categoryId, matchingCategoryIds);
 
   let canonicalRow = canonical;
   const canonicalNeedsUpdate =
@@ -884,6 +995,7 @@ async function mergeCategoriesInWorkspaceByNormalizedName(
   const resourceRows = await db
     .update(resourceCards)
     .set({
+      categoryId: canonicalRow.id,
       category: resolved.name,
       ownerUserId: resolved.ownerUserId,
       updatedAt: sql`NOW()`,
@@ -891,8 +1003,9 @@ async function mergeCategoriesInWorkspaceByNormalizedName(
     .where(
       and(
         eq(resourceCards.workspaceId, workspaceId),
-        resourceCategoryMatchCondition,
+        or(resourceCategoryMatchCondition, resourceCategoryIdMatchCondition),
         or(
+          sql`${resourceCards.categoryId} IS DISTINCT FROM ${canonicalRow.id}`,
           sql`${resourceCards.category} IS DISTINCT FROM ${resolved.name}`,
           sql`${resourceCards.ownerUserId} IS DISTINCT FROM ${resolved.ownerUserId}`,
         ),
@@ -1545,6 +1658,7 @@ export async function deleteResourceCategory(
   const reassigned = await db
     .update(resourceCards)
     .set({
+      categoryId: reassignedCategory.id,
       category: reassignedCategory.name,
       ownerUserId: reassignedCategory.ownerUserId ?? null,
       updatedAt: sql`NOW()`,
@@ -1552,7 +1666,10 @@ export async function deleteResourceCategory(
     .where(
       and(
         eq(resourceCards.workspaceId, deletedCategory.workspaceId),
-        sql`${normalizedCategorySql(resourceCards.category)} = ${normalizedDeletedName}`,
+        or(
+          eq(resourceCards.categoryId, deletedCategory.id),
+          sql`${normalizedCategorySql(resourceCards.category)} = ${normalizedDeletedName}`,
+        ),
       ),
     )
     .returning({ id: resourceCards.id });
@@ -1603,7 +1720,9 @@ export async function listResources(options?: {
     .select({
       resourceId: resourceCards.id,
       resourceWorkspaceId: resourceCards.workspaceId,
+      resourceCategoryId: resourceCards.categoryId,
       resourceCategory: resourceCards.category,
+      resourceSortOrder: resourceCards.sortOrder,
       resourceOwnerUserId: resourceCards.ownerUserId,
       resourceDeletedAt: resourceCards.deletedAt,
       resourceCreatedAt: resourceCards.createdAt,
@@ -1628,7 +1747,9 @@ export async function listResourcesIncludingDeleted(): Promise<ResourceCard[]> {
     .select({
       resourceId: resourceCards.id,
       resourceWorkspaceId: resourceCards.workspaceId,
+      resourceCategoryId: resourceCards.categoryId,
       resourceCategory: resourceCards.category,
+      resourceSortOrder: resourceCards.sortOrder,
       resourceOwnerUserId: resourceCards.ownerUserId,
       resourceDeletedAt: resourceCards.deletedAt,
       resourceCreatedAt: resourceCards.createdAt,
@@ -1702,12 +1823,18 @@ export async function createResource(
     undefined,
     normalizedOwnerUserId,
   );
+  const nextSortOrder = await getNextSortOrderForCategory(
+    workspace.id,
+    category.id,
+  );
 
   const insertedCards = await db
     .insert(resourceCards)
     .values({
       workspaceId: workspace.id,
+      categoryId: category.id,
       category: category.name,
+      sortOrder: nextSortOrder,
       ownerUserId: category.ownerUserId ?? null,
     })
     .returning({
@@ -1758,6 +1885,8 @@ export async function updateResource(
   const existingRows = await db
     .select({
       workspaceId: resourceCards.workspaceId,
+      categoryId: resourceCards.categoryId,
+      sortOrder: resourceCards.sortOrder,
     })
     .from(resourceCards)
     .where(and(eq(resourceCards.id, id), isNull(resourceCards.deletedAt)))
@@ -1781,12 +1910,20 @@ export async function updateResource(
     undefined,
     normalizedOwnerUserId,
   );
+  const didPlacementChange =
+    existing.workspaceId !== workspace.id ||
+    (existing.categoryId ?? null) !== category.id;
+  const nextSortOrder = didPlacementChange
+    ? await getNextSortOrderForCategory(workspace.id, category.id)
+    : Math.max(RESOURCE_ORDER_STEP, normalizeSortOrder(existing.sortOrder));
 
   const updatedCards = await db
     .update(resourceCards)
     .set({
       workspaceId: workspace.id,
+      categoryId: category.id,
       category: category.name,
+      sortOrder: nextSortOrder,
       ownerUserId: category.ownerUserId ?? null,
       updatedAt: sql`NOW()`,
     })
@@ -1879,6 +2016,145 @@ export async function restoreResource(
   }
 
   return resource;
+}
+
+export async function moveResourceItem(
+  input: MoveResourceItemInput,
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean },
+): Promise<MoveResourceItemResult> {
+  await ensureSchema();
+  const db = getDb();
+
+  const normalizedItemId = normalizeAndValidateUuid(input.itemId, "Item ID");
+  const normalizedSourceCategoryId = normalizeAndValidateUuid(
+    input.sourceCategoryId,
+    "Source category ID",
+  );
+  const normalizedTargetCategoryId = normalizeAndValidateUuid(
+    input.targetCategoryId,
+    "Target category ID",
+  );
+  const requestedOrder = normalizeSortOrder(input.newOrder);
+  const nextOrder = requestedOrder > 0 ? requestedOrder : RESOURCE_ORDER_STEP;
+
+  const sourceCategory = await ensureCategoryVisibleToActor(
+    normalizedSourceCategoryId,
+    options?.actorUserId,
+    { includeAllWorkspaces: options?.includeAllWorkspaces },
+  );
+  const targetCategory =
+    normalizedSourceCategoryId === normalizedTargetCategoryId
+      ? sourceCategory
+      : await ensureCategoryVisibleToActor(
+          normalizedTargetCategoryId,
+          options?.actorUserId,
+          { includeAllWorkspaces: options?.includeAllWorkspaces },
+        );
+
+  if (sourceCategory.workspaceId !== targetCategory.workspaceId) {
+    throw new ResourceMoveConflictError(
+      "Source and target categories must belong to the same workspace.",
+    );
+  }
+
+  const rebalancePatches = await db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: resourceCards.id,
+        workspaceId: resourceCards.workspaceId,
+        categoryId: resourceCards.categoryId,
+        category: resourceCards.category,
+      })
+      .from(resourceCards)
+      .where(
+        and(
+          eq(resourceCards.id, normalizedItemId),
+          isNull(resourceCards.deletedAt),
+        ),
+      )
+      .limit(1);
+
+    const item = rows[0];
+    if (!item) {
+      throw new ResourceNotFoundError(normalizedItemId);
+    }
+
+    if (item.workspaceId !== sourceCategory.workspaceId) {
+      throw new ResourceMoveConflictError(
+        "Item workspace does not match the source category.",
+      );
+    }
+
+    const matchesSourceCategory =
+      item.categoryId !== null
+        ? item.categoryId === sourceCategory.id
+        : normalizeCategoryNameLower(item.category) ===
+          normalizeCategoryNameLower(sourceCategory.name);
+    if (!matchesSourceCategory) {
+      throw new ResourceMoveConflictError(
+        "Item no longer belongs to the source category.",
+      );
+    }
+
+    await tx
+      .update(resourceCards)
+      .set({
+        categoryId: targetCategory.id,
+        category: targetCategory.name,
+        sortOrder: nextOrder,
+        ownerUserId: targetCategory.ownerUserId ?? null,
+        updatedAt: sql`NOW()`,
+      })
+      .where(eq(resourceCards.id, normalizedItemId));
+
+    const collisions = await tx
+      .select({ id: resourceCards.id })
+      .from(resourceCards)
+      .where(
+        and(
+          eq(resourceCards.workspaceId, targetCategory.workspaceId),
+          eq(resourceCards.categoryId, targetCategory.id),
+          eq(resourceCards.sortOrder, nextOrder),
+          isNull(resourceCards.deletedAt),
+          sql`${resourceCards.id} <> ${normalizedItemId}`,
+        ),
+      )
+      .limit(1);
+
+    if (collisions.length === 0) {
+      return [] as MoveResourceItemPatch[];
+    }
+
+    return rebalanceCategoryOrders(
+      targetCategory.workspaceId,
+      targetCategory.id,
+      tx,
+    );
+  });
+
+  const movedItem = await findResourceById(normalizedItemId, {
+    includeDeleted: false,
+  });
+  if (!movedItem) {
+    throw new ResourceNotFoundError(normalizedItemId);
+  }
+
+  const patchesById = new Map<string, MoveResourceItemPatch>();
+  for (const patch of rebalancePatches) {
+    patchesById.set(patch.id, patch);
+  }
+
+  patchesById.set(movedItem.id, {
+    id: movedItem.id,
+    categoryId: movedItem.categoryId ?? targetCategory.id,
+    category: movedItem.category,
+    order: normalizeSortOrder(movedItem.order),
+  });
+
+  return {
+    item: movedItem,
+    affectedItems: [...patchesById.values()],
+  };
 }
 
 export async function getResourceOwnerById(id: string): Promise<{

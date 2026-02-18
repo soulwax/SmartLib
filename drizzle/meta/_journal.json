@@ -92,6 +92,13 @@
       "when": 1771449600000,
       "tag": "0012_noble_molecule",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1771450797539,
+      "tag": "0013_charming_tigra",
+      "breakpoints": true
     }
   ]
 }

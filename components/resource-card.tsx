@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react"
 
 import type { ResourceCard } from "@/lib/resources"
+import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -59,6 +60,7 @@ function ResourceLinkCompactItem({
       <TooltipTrigger asChild>
         <a
           href={url}
+          draggable={false}
           target={openInSameTab ? "_self" : "_blank"}
           rel={openInSameTab ? undefined : "noopener noreferrer"}
           data-resource-link-id={linkId}
@@ -114,6 +116,8 @@ function ResourceLinkCompactItem({
 
 interface ResourceCardProps {
   resource: ResourceCard
+  categoryId?: string | null
+  order?: number
   categorySymbol?: string | null
   onDelete: (id: string) => void
   onEdit: (resource: ResourceCard) => void
@@ -132,10 +136,16 @@ interface ResourceCardProps {
   isDeleting?: boolean
   canManage?: boolean
   openLinksInSameTab?: boolean
+  draggable?: boolean
+  isDragging?: boolean
+  onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void
+  onDragEnd?: () => void
 }
 
 export function ResourceCardItem({
   resource,
+  categoryId,
+  order,
   categorySymbol,
   onDelete,
   onEdit,
@@ -145,6 +155,10 @@ export function ResourceCardItem({
   isDeleting = false,
   canManage = false,
   openLinksInSameTab = false,
+  draggable = false,
+  isDragging = false,
+  onDragStart,
+  onDragEnd,
 }: ResourceCardProps) {
   const [contextLinkId, setContextLinkId] = useState<string | null>(null)
 
@@ -227,9 +241,19 @@ export function ResourceCardItem({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          className="group flex flex-col rounded-lg border border-border bg-card p-5 shadow-sm transition-all hover:border-primary/30 hover:shadow-md hover:shadow-primary/5"
+          className={cn(
+            "group flex flex-col rounded-lg border border-border bg-card p-5 shadow-sm transition-all hover:border-primary/30 hover:shadow-md hover:shadow-primary/5",
+            draggable ? "cursor-grab active:cursor-grabbing" : "",
+          )}
+          data-resource-item-id={resource.id}
+          data-resource-category-id={categoryId ?? undefined}
+          data-resource-order={typeof order === "number" ? order : undefined}
+          draggable={draggable}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
           onContextMenuCapture={handleContextMenuCapture}
           onContextMenu={handleContextMenu}
+          style={isDragging ? { opacity: 0.45 } : undefined}
         >
           <div className="mb-3 flex items-center justify-between">
             <Tooltip>

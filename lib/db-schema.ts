@@ -20,6 +20,10 @@ export const resourceCards = pgTable(
       .notNull()
       .references(() => resourceWorkspaces.id, { onDelete: "cascade" }),
     category: text("category").notNull(),
+    categoryId: uuid("category_id").references(() => resourceCategories.id, {
+      onDelete: "set null",
+    }),
+    sortOrder: integer("sort_order").notNull().default(0),
     ownerUserId: uuid("owner_user_id").references(() => appUsers.id, {
       onDelete: "set null",
     }),
@@ -36,8 +40,15 @@ export const resourceCards = pgTable(
       "resource_cards_category_length_check",
       sql`char_length(${table.category}) <= 80`
     ),
+    check("resource_cards_sort_order_check", sql`${table.sortOrder} >= 0`),
     index("resource_cards_created_at_idx").on(table.createdAt),
     index("resource_cards_workspace_id_idx").on(table.workspaceId),
+    index("resource_cards_category_id_idx").on(table.categoryId),
+    index("resource_cards_workspace_category_sort_idx").on(
+      table.workspaceId,
+      table.categoryId,
+      table.sortOrder
+    ),
     index("resource_cards_owner_user_id_idx").on(table.ownerUserId),
     // Partial index covering only active (non-deleted) rows — used by the
     // hot listResources query: WHERE deleted_at IS NULL AND workspace_id = ?

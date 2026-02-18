@@ -6,6 +6,9 @@ import {
   hostnameFromUrl,
 } from "@/lib/favicon-service"
 import type {
+  MoveResourceItemInput,
+  MoveResourceItemPatch,
+  MoveResourceItemResult,
   ResourceCategory,
   ResourceAuditAction,
   ResourceAuditActor,
@@ -17,6 +20,7 @@ import type {
 import { DEFAULT_CATEGORY_SUGGESTIONS } from "@/lib/resources"
 import {
   ResourceCategoryNotFoundError,
+  ResourceMoveConflictError,
   ResourceNotFoundError,
   ResourceWorkspaceAlreadyExistsError,
   ResourceWorkspaceLimitReachedError,
@@ -31,15 +35,19 @@ let mockWorkspaces: ResourceWorkspace[] | null = null
 const MAIN_RESOURCE_WORKSPACE_NAME = "Main Workspace"
 const DEFAULT_RESOURCE_CATEGORY_NAME = "General"
 const FALLBACK_RESOURCE_CATEGORY_NAME = "Uncategorized"
+const RESOURCE_ORDER_STEP = 1024
 
 function cloneResource(resource: ResourceCard): ResourceCard {
   return {
     id: resource.id,
     workspaceId: resource.workspaceId,
+    categoryId: resource.categoryId ?? null,
     category: resource.category,
+    order: typeof resource.order === "number" ? resource.order : 0,
     ownerUserId: resource.ownerUserId ?? null,
     tags: [...(resource.tags ?? [])],
     deletedAt: resource.deletedAt ?? null,
+    createdAt: resource.createdAt ?? null,
     links: resource.links.map((link) => {
       const hostname = hostnameFromUrl(link.url)
       const faviconUrl =
@@ -95,6 +103,14 @@ function normalizeCategorySymbol(value: string | null | undefined): string | nul
   }
 
   return normalized.slice(0, 16)
+}
+
+function normalizeSortOrder(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.max(0, Math.floor(value))
 }
 
 function normalizeTimestampToMs(value: string | null | undefined): number {
@@ -290,6 +306,7 @@ function mergeMockCategoriesInWorkspaceByNormalizedName(
         .filter((key) => key.length > 0),
     ]
   )
+  const categoryIdSet = new Set(sortedCategories.map((category) => category.id))
 
   const canonicalNeedsUpdate =
     normalizeCategoryName(canonical.name) !== resolved.name ||
@@ -328,11 +345,15 @@ function mergeMockCategoriesInWorkspaceByNormalizedName(
       return resource
     }
 
-    if (!normalizedCategoryKeySet.has(normalizeCategoryNameLower(resource.category))) {
+    if (
+      !categoryIdSet.has(resource.categoryId ?? "") &&
+      !normalizedCategoryKeySet.has(normalizeCategoryNameLower(resource.category))
+    ) {
       return resource
     }
 
     if (
+      (resource.categoryId ?? null) === canonical.id &&
       resource.category === resolved.name &&
       (resource.ownerUserId ?? null) === resolved.ownerUserId
     ) {
@@ -342,6 +363,7 @@ function mergeMockCategoriesInWorkspaceByNormalizedName(
     updatedResources += 1
     return {
       ...resource,
+      categoryId: canonical.id,
       category: resolved.name,
       ownerUserId: resolved.ownerUserId,
     }
@@ -414,6 +436,100 @@ function appendMockAuditLog(
   mockAuditLogs = [next, ...(mockAuditLogs ?? [])]
 }
 
+function compareResourcesForOrder(left: ResourceCard, right: ResourceCard): number {
+  const leftOrder = normalizeSortOrder(left.order)
+  const rightOrder = normalizeSortOrder(right.order)
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder
+  }
+
+  const leftCreated = Date.parse(left.createdAt ?? "")
+  const rightCreated = Date.parse(right.createdAt ?? "")
+  if (Number.isFinite(leftCreated) && Number.isFinite(rightCreated)) {
+    if (leftCreated !== rightCreated) {
+      return leftCreated - rightCreated
+    }
+  }
+
+  return left.id.localeCompare(right.id)
+}
+
+function getNextSortOrderForCategory(workspaceId: string, categoryId: string): number {
+  const scoped = (mockStore ?? [])
+    .filter(
+      (resource) =>
+        resource.workspaceId === workspaceId &&
+        (resource.categoryId ?? null) === categoryId &&
+        !resource.deletedAt
+    )
+    .sort(compareResourcesForOrder)
+  const maxOrder = normalizeSortOrder(scoped.at(-1)?.order ?? 0)
+  return maxOrder + RESOURCE_ORDER_STEP
+}
+
+function assignSparseOrderDefaults() {
+  const grouped = new Map<string, ResourceCard[]>()
+  for (const resource of mockStore ?? []) {
+    const categoryId = resource.categoryId ?? ""
+    if (!categoryId) {
+      continue
+    }
+    const key = `${resource.workspaceId}:${categoryId}`
+    const bucket = grouped.get(key) ?? []
+    bucket.push(resource)
+    grouped.set(key, bucket)
+  }
+
+  for (const resources of grouped.values()) {
+    resources.sort(compareResourcesForOrder)
+    let requiresReindex = false
+    for (const resource of resources) {
+      if (normalizeSortOrder(resource.order) === 0) {
+        requiresReindex = true
+        break
+      }
+    }
+
+    if (!requiresReindex) {
+      continue
+    }
+
+    resources.forEach((resource, index) => {
+      resource.order = (index + 1) * RESOURCE_ORDER_STEP
+    })
+  }
+}
+
+function ensureMockResourcePlacement() {
+  const categoriesByWorkspaceAndName = new Map<string, ResourceCategory>()
+  for (const category of mockCategories ?? []) {
+    const key = `${category.workspaceId}:${normalizeCategoryNameLower(category.name)}`
+    categoriesByWorkspaceAndName.set(key, category)
+  }
+
+  mockStore = (mockStore ?? []).map((resource) => {
+    const key = `${resource.workspaceId}:${normalizeCategoryNameLower(resource.category)}`
+    const category = categoriesByWorkspaceAndName.get(key)
+    if (!category) {
+      return {
+        ...resource,
+        categoryId: resource.categoryId ?? null,
+        order: normalizeSortOrder(resource.order),
+      }
+    }
+
+    return {
+      ...resource,
+      categoryId: category.id,
+      category: category.name,
+      ownerUserId: category.ownerUserId ?? resource.ownerUserId ?? null,
+      order: normalizeSortOrder(resource.order),
+    }
+  })
+
+  assignSparseOrderDefaults()
+}
+
 function ensureMockStore() {
   if (mockWorkspaces === null) {
     mockWorkspaces = []
@@ -457,6 +573,7 @@ function ensureMockStore() {
   }
 
   mergeAllMockDuplicateCategories()
+  ensureMockResourcePlacement()
 }
 
 function mergeAllMockDuplicateCategories() {
@@ -703,6 +820,17 @@ export async function listMockResources(options?: {
   return (mockStore ?? [])
     .filter((resource) => !resource.deletedAt)
     .filter((resource) => visibleWorkspaceIdSet.has(resource.workspaceId))
+    .sort((left, right) => {
+      if (left.workspaceId !== right.workspaceId) {
+        return left.workspaceId.localeCompare(right.workspaceId)
+      }
+
+      if (left.category !== right.category) {
+        return left.category.localeCompare(right.category)
+      }
+
+      return compareResourcesForOrder(left, right)
+    })
     .map(cloneResource)
 }
 
@@ -908,13 +1036,17 @@ export async function deleteMockResourceCategory(
       return resource
     }
 
-    if (normalizeCategoryNameLower(resource.category) !== normalizedDeletedName) {
+    if (
+      (resource.categoryId ?? null) !== existing.id &&
+      normalizeCategoryNameLower(resource.category) !== normalizedDeletedName
+    ) {
       return resource
     }
 
     reassignedResources += 1
     return {
       ...resource,
+      categoryId: reassignedCategory.id,
       category: reassignedCategory.name,
       ownerUserId: reassignedCategory.ownerUserId ?? null,
     }
@@ -956,14 +1088,19 @@ export async function createMockResource(
     workspace.id,
     options?.ownerUserId ?? workspace.ownerUserId ?? null
   )
+  const createdAt = new Date().toISOString()
+  const order = getNextSortOrderForCategory(workspace.id, category.id)
 
   const created: ResourceCard = {
     id: crypto.randomUUID(),
     workspaceId: workspace.id,
+    categoryId: category.id,
     category: category.name,
+    order,
     ownerUserId: category.ownerUserId ?? null,
     tags: input.tags,
     deletedAt: null,
+    createdAt,
     links: input.links.map((link) => ({
       id: crypto.randomUUID(),
       url: link.url,
@@ -1002,14 +1139,23 @@ export async function updateMockResource(
     workspace.id,
     options?.ownerUserId ?? workspace.ownerUserId ?? null
   )
+  const movedAcrossCategory =
+    previous.workspaceId !== workspace.id ||
+    (previous.categoryId ?? null) !== category.id
+  const nextOrder = movedAcrossCategory
+    ? getNextSortOrderForCategory(workspace.id, category.id)
+    : Math.max(RESOURCE_ORDER_STEP, normalizeSortOrder(previous.order))
 
   const updated: ResourceCard = {
     id,
     workspaceId: workspace.id,
+    categoryId: category.id,
     category: category.name,
+    order: nextOrder,
     ownerUserId: category.ownerUserId ?? null,
     tags: input.tags,
     deletedAt: previous.deletedAt ?? null,
+    createdAt: previous.createdAt ?? new Date().toISOString(),
     links: input.links.map((link) => ({
       id: crypto.randomUUID(),
       url: link.url,
@@ -1023,6 +1169,146 @@ export async function updateMockResource(
   mockStore = next
 
   return cloneResource(updated)
+}
+
+function rebalanceMockCategoryOrders(
+  workspaceId: string,
+  categoryId: string
+): MoveResourceItemPatch[] {
+  const scoped = (mockStore ?? [])
+    .filter(
+      (resource) =>
+        resource.workspaceId === workspaceId &&
+        (resource.categoryId ?? null) === categoryId &&
+        !resource.deletedAt
+    )
+    .sort(compareResourcesForOrder)
+
+  const patches: MoveResourceItemPatch[] = []
+  for (let index = 0; index < scoped.length; index += 1) {
+    const resource = scoped[index]
+    const nextOrder = (index + 1) * RESOURCE_ORDER_STEP
+    if (normalizeSortOrder(resource.order) === nextOrder) {
+      continue
+    }
+
+    resource.order = nextOrder
+    patches.push({
+      id: resource.id,
+      categoryId,
+      category: resource.category,
+      order: nextOrder,
+    })
+  }
+
+  return patches
+}
+
+export async function moveMockResourceItem(
+  input: MoveResourceItemInput,
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+): Promise<MoveResourceItemResult> {
+  ensureMockStore()
+
+  const sourceCategory = (mockCategories ?? []).find(
+    (category) => category.id === input.sourceCategoryId
+  )
+  if (!sourceCategory) {
+    throw new ResourceCategoryNotFoundError(input.sourceCategoryId)
+  }
+
+  const targetCategory = (mockCategories ?? []).find(
+    (category) => category.id === input.targetCategoryId
+  )
+  if (!targetCategory) {
+    throw new ResourceCategoryNotFoundError(input.targetCategoryId)
+  }
+
+  requireVisibleWorkspace(sourceCategory.workspaceId, options?.actorUserId, {
+    includeAllWorkspaces: options?.includeAllWorkspaces,
+  })
+  requireVisibleWorkspace(targetCategory.workspaceId, options?.actorUserId, {
+    includeAllWorkspaces: options?.includeAllWorkspaces,
+  })
+
+  if (sourceCategory.workspaceId !== targetCategory.workspaceId) {
+    throw new ResourceMoveConflictError(
+      "Source and target categories must share a workspace."
+    )
+  }
+
+  const index = (mockStore ?? []).findIndex(
+    (resource) => resource.id === input.itemId && !resource.deletedAt
+  )
+  if (index < 0) {
+    throw new ResourceNotFoundError(input.itemId)
+  }
+
+  const previous = (mockStore ?? [])[index]
+  if (previous.workspaceId !== sourceCategory.workspaceId) {
+    throw new ResourceMoveConflictError(
+      "Item workspace does not match source category."
+    )
+  }
+
+  const matchesSource =
+    previous.categoryId !== undefined && previous.categoryId !== null
+      ? previous.categoryId === sourceCategory.id
+      : normalizeCategoryNameLower(previous.category) ===
+        normalizeCategoryNameLower(sourceCategory.name)
+  if (!matchesSource) {
+    throw new ResourceMoveConflictError(
+      "Item no longer belongs to the source category."
+    )
+  }
+
+  const requestedOrder = normalizeSortOrder(input.newOrder)
+  const nextOrder = requestedOrder > 0 ? requestedOrder : RESOURCE_ORDER_STEP
+
+  const updated: ResourceCard = {
+    ...previous,
+    categoryId: targetCategory.id,
+    category: targetCategory.name,
+    order: nextOrder,
+    ownerUserId: targetCategory.ownerUserId ?? null,
+  }
+
+  const nextStore = [...(mockStore ?? [])]
+  nextStore[index] = updated
+  mockStore = nextStore
+
+  const hasCollision = (mockStore ?? []).some(
+    (resource) =>
+      resource.id !== updated.id &&
+      !resource.deletedAt &&
+      resource.workspaceId === targetCategory.workspaceId &&
+      (resource.categoryId ?? null) === targetCategory.id &&
+      normalizeSortOrder(resource.order) === nextOrder
+  )
+
+  const patches = hasCollision
+    ? rebalanceMockCategoryOrders(targetCategory.workspaceId, targetCategory.id)
+    : []
+  const moved = (mockStore ?? []).find((resource) => resource.id === updated.id)
+  if (!moved) {
+    throw new ResourceNotFoundError(updated.id)
+  }
+
+  const patchesById = new Map<string, MoveResourceItemPatch>()
+  for (const patch of patches) {
+    patchesById.set(patch.id, patch)
+  }
+  patchesById.set(moved.id, {
+    id: moved.id,
+    categoryId: moved.categoryId ?? targetCategory.id,
+    category: moved.category,
+    order: normalizeSortOrder(moved.order),
+  })
+
+  return {
+    item: cloneResource(moved),
+    affectedItems: [...patchesById.values()],
+  }
 }
 
 export async function deleteMockResource(

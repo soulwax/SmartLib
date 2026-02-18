@@ -27,9 +27,12 @@ import type {
   ResourceWorkspace,
 } from "@/lib/resources";
 import { AddResourceModal } from "@/components/add-resource-modal";
+import {
+  ResourceBoard,
+  type ResourceBoardMoveInput,
+} from "@/components/resource-board";
 import { CategorySidebar } from "@/components/category-sidebar";
 import { useColorScheme } from "@/components/color-scheme-provider";
-import { ResourceCardItem } from "@/components/resource-card";
 import { WorkspaceRail } from "@/components/workspace-rail";
 import { Button } from "@/components/ui/button";
 import {
@@ -242,6 +245,17 @@ interface ResourceResponse extends ApiErrorResponse {
   resource?: ResourceCard;
 }
 
+interface MoveItemResponse extends ApiErrorResponse {
+  mode?: "database" | "mock";
+  item?: ResourceCard;
+  affectedItems?: Array<{
+    id: string;
+    categoryId: string;
+    category: string;
+    order: number;
+  }>;
+}
+
 type AuthMode = "login" | "register";
 
 interface SectionPreferences {
@@ -291,6 +305,170 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettingsPreferences = {
   showMockModeBadge: true,
   aiFeaturesEnabled: false,
 };
+const RESOURCE_ORDER_STEP = 1024;
+const MAX_RESOURCE_ORDER = Number.MAX_SAFE_INTEGER;
+
+function compareResourcesByOrder(left: ResourceCard, right: ResourceCard): number {
+  const leftOrder =
+    typeof left.order === "number" ? left.order : MAX_RESOURCE_ORDER;
+  const rightOrder =
+    typeof right.order === "number" ? right.order : MAX_RESOURCE_ORDER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+
+  const leftCreated = Date.parse(left.createdAt ?? "");
+  const rightCreated = Date.parse(right.createdAt ?? "");
+  if (Number.isFinite(leftCreated) && Number.isFinite(rightCreated)) {
+    if (leftCreated !== rightCreated) {
+      return leftCreated - rightCreated;
+    }
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function calculateSparseOrder(
+  beforeOrder: number | null,
+  afterOrder: number | null,
+): number | null {
+  if (beforeOrder === null && afterOrder === null) {
+    return RESOURCE_ORDER_STEP;
+  }
+
+  if (beforeOrder === null) {
+    const safeAfterOrder =
+      typeof afterOrder === "number" ? afterOrder : RESOURCE_ORDER_STEP;
+    const candidate = safeAfterOrder - RESOURCE_ORDER_STEP;
+    return candidate > 0 ? candidate : null;
+  }
+
+  if (afterOrder === null) {
+    return beforeOrder + RESOURCE_ORDER_STEP;
+  }
+
+  const gap = afterOrder - beforeOrder;
+  if (gap <= 1) {
+    return null;
+  }
+
+  return beforeOrder + Math.floor(gap / 2);
+}
+
+interface ApplyOptimisticMoveInput {
+  resources: ResourceCard[];
+  itemId: string;
+  sourceCategoryId: string;
+  targetCategoryId: string;
+  targetCategoryName: string;
+  sourceIndex: number;
+  targetIndex: number;
+  resolveCategoryId: (resource: ResourceCard) => string | null;
+}
+
+interface ApplyOptimisticMoveResult {
+  resources: ResourceCard[];
+  newOrder: number;
+}
+
+function applyOptimisticMove({
+  resources,
+  itemId,
+  sourceCategoryId,
+  targetCategoryId,
+  targetCategoryName,
+  sourceIndex,
+  targetIndex,
+  resolveCategoryId,
+}: ApplyOptimisticMoveInput): ApplyOptimisticMoveResult | null {
+  const moving = resources.find((resource) => resource.id === itemId);
+  if (!moving) {
+    return null;
+  }
+
+  const targetWithoutMoving = resources
+    .filter((resource) => {
+      if (resource.id === itemId) {
+        return false;
+      }
+
+      return resolveCategoryId(resource) === targetCategoryId;
+    })
+    .sort(compareResourcesByOrder);
+
+  const normalizedTargetIndex = Math.max(
+    0,
+    Math.min(
+      targetWithoutMoving.length,
+      sourceCategoryId === targetCategoryId && targetIndex > sourceIndex
+        ? targetIndex - 1
+        : targetIndex,
+    ),
+  );
+
+  if (
+    sourceCategoryId === targetCategoryId &&
+    normalizedTargetIndex === sourceIndex
+  ) {
+    return null;
+  }
+
+  const before = targetWithoutMoving[normalizedTargetIndex - 1] ?? null;
+  const after = targetWithoutMoving[normalizedTargetIndex] ?? null;
+  const beforeOrder =
+    typeof before?.order === "number" ? before.order : null;
+  const afterOrder = typeof after?.order === "number" ? after.order : null;
+
+  let nextOrder = calculateSparseOrder(beforeOrder, afterOrder);
+  const orderUpdates = new Map<string, number>();
+
+  if (nextOrder === null) {
+    const rebalanced = [...targetWithoutMoving];
+    for (let index = 0; index < rebalanced.length; index += 1) {
+      orderUpdates.set(rebalanced[index].id, (index + 1) * RESOURCE_ORDER_STEP);
+    }
+
+    const rebalancedBeforeOrder =
+      normalizedTargetIndex > 0
+        ? normalizedTargetIndex * RESOURCE_ORDER_STEP
+        : null;
+    const rebalancedAfterOrder =
+      normalizedTargetIndex < rebalanced.length
+        ? (normalizedTargetIndex + 1) * RESOURCE_ORDER_STEP
+        : null;
+    nextOrder = calculateSparseOrder(rebalancedBeforeOrder, rebalancedAfterOrder);
+  }
+
+  if (nextOrder === null) {
+    return null;
+  }
+
+  const nextResources = resources.map((resource) => {
+    if (resource.id === itemId) {
+      return {
+        ...resource,
+        categoryId: targetCategoryId,
+        category: targetCategoryName,
+        order: nextOrder,
+      };
+    }
+
+    const patchedOrder = orderUpdates.get(resource.id);
+    if (patchedOrder === undefined) {
+      return resource;
+    }
+
+    return {
+      ...resource,
+      order: patchedOrder,
+    };
+  });
+
+  return {
+    resources: nextResources,
+    newOrder: nextOrder,
+  };
+}
 
 function createAskLibraryTurnId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1305,6 +1483,45 @@ export default function Page() {
     },
     [categoryRecordByLowerName, sessionUserId],
   );
+  const resolveResourceCategoryId = useCallback(
+    (resource: ResourceCard): string | null => {
+      if (resource.categoryId) {
+        return resource.categoryId;
+      }
+
+      const categoryRecord =
+        categoryRecordByLowerName.get(resource.category.toLowerCase()) ?? null;
+      return categoryRecord?.id ?? null;
+    },
+    [categoryRecordByLowerName],
+  );
+  const boardColumns = useMemo(() => {
+    const columnNames =
+      activeCategory === "All" ? categories : [activeCategory];
+
+    const filteredColumnNames =
+      isSearchActive && activeCategory === "All"
+        ? columnNames.filter((name) =>
+            filteredResources.some((resource) => resource.category === name),
+          )
+        : columnNames;
+
+    return filteredColumnNames.map((name) => {
+      const record = categoryRecordByLowerName.get(name.toLowerCase()) ?? null;
+      return {
+        id: record?.id ?? null,
+        name,
+        symbol: categorySymbols[name] ?? null,
+      };
+    });
+  }, [
+    activeCategory,
+    categories,
+    categoryRecordByLowerName,
+    categorySymbols,
+    filteredResources,
+    isSearchActive,
+  ]);
 
   const activeColorScheme =
     colorSchemes[currentSchemeIndex] ?? colorSchemes[0] ?? null;
@@ -2580,6 +2797,120 @@ export default function Page() {
     [canManageResourceCard],
   );
 
+  const handleMoveResourceItem = useCallback(
+    async (moveInput: ResourceBoardMoveInput) => {
+      let rollbackResources: ResourceCard[] | null = null;
+      let requestPayload:
+        | {
+            itemId: string;
+            sourceCategoryId: string;
+            targetCategoryId: string;
+            newOrder: number;
+          }
+        | null = null;
+
+      setResources((previous) => {
+        const moving = previous.find(
+          (resource) => resource.id === moveInput.itemId,
+        );
+        if (!moving || !canManageResourceCard(moving)) {
+          return previous;
+        }
+
+        const optimistic = applyOptimisticMove({
+          resources: previous,
+          itemId: moveInput.itemId,
+          sourceCategoryId: moveInput.sourceCategoryId,
+          targetCategoryId: moveInput.targetCategoryId,
+          targetCategoryName: moveInput.targetCategoryName,
+          sourceIndex: moveInput.sourceIndex,
+          targetIndex: moveInput.targetIndex,
+          resolveCategoryId: resolveResourceCategoryId,
+        });
+
+        if (!optimistic) {
+          return previous;
+        }
+
+        rollbackResources = previous;
+        requestPayload = {
+          itemId: moveInput.itemId,
+          sourceCategoryId: moveInput.sourceCategoryId,
+          targetCategoryId: moveInput.targetCategoryId,
+          newOrder: optimistic.newOrder,
+        };
+
+        return optimistic.resources;
+      });
+
+      if (!requestPayload) {
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/items/move", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestPayload),
+        });
+        const payload = await readJson<MoveItemResponse>(response);
+        if (!response.ok || !payload?.item) {
+          throw new Error(payload?.error ?? "Failed to move resource.");
+        }
+
+        if (payload.mode) {
+          setDataMode(payload.mode);
+        }
+
+        const movedItem = payload.item;
+        const affectedMap = new Map(
+          (payload.affectedItems ?? []).map((item) => [item.id, item]),
+        );
+        if (movedItem.categoryId) {
+          affectedMap.set(movedItem.id, {
+            id: movedItem.id,
+            categoryId: movedItem.categoryId,
+            category: movedItem.category,
+            order: typeof movedItem.order === "number" ? movedItem.order : 0,
+          });
+        }
+
+        setResources((previous) =>
+          previous.map((resource) => {
+            if (resource.id === movedItem.id) {
+              return movedItem;
+            }
+
+            const patch = affectedMap.get(resource.id);
+            if (!patch) {
+              return resource;
+            }
+
+            return {
+              ...resource,
+              categoryId: patch.categoryId,
+              category: patch.category,
+              order: patch.order,
+            };
+          }),
+        );
+      } catch (error) {
+        if (rollbackResources) {
+          setResources(rollbackResources);
+        }
+        toast.error("Move failed", {
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not move this resource card.",
+        });
+      }
+    },
+    [canManageResourceCard, resolveResourceCategoryId],
+  );
+
   const handleOpenCreateResourceModal = useCallback(() => {
     if (!canManageResources) {
       toast.error("Insufficient permissions", {
@@ -3661,22 +3992,19 @@ export default function Page() {
                   ) : null}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                  {filteredResources.map((resource) => (
-                    <ResourceCardItem
-                      key={resource.id}
-                      resource={resource}
-                      categorySymbol={categorySymbols[resource.category]}
-                      onDelete={handleDelete}
-                      onEdit={handleEdit}
-                      canEditCategory={canEditCategoryByName(resource.category)}
-                      onEditCategory={handleOpenEditCategoryDialogByName}
-                      isDeleting={deletingResourceId === resource.id}
-                      canManage={canManageResourceCard(resource)}
-                      openLinksInSameTab={generalSettings.openLinksInSameTab}
-                    />
-                  ))}
-                </div>
+                <ResourceBoard
+                  columns={boardColumns}
+                  resources={filteredResources}
+                  dragEnabled={canManageResources && !isSearchActive}
+                  canManageResource={canManageResourceCard}
+                  canEditCategoryByName={canEditCategoryByName}
+                  onEditCategory={handleOpenEditCategoryDialogByName}
+                  onMoveItem={handleMoveResourceItem}
+                  onDelete={handleDelete}
+                  onEdit={handleEdit}
+                  deletingResourceId={deletingResourceId}
+                  openLinksInSameTab={generalSettings.openLinksInSameTab}
+                />
               )}
             </main>
           </ContextMenuTrigger>

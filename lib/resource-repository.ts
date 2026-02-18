@@ -330,6 +330,7 @@ function mapRowsToResources(rows: ResourceJoinRow[]): ResourceCard[] {
         ownerUserId: row.resourceOwnerUserId,
         tags: [],
         deletedAt: normalizeTimestamp(row.resourceDeletedAt),
+        createdAt: normalizeTimestamp(row.resourceCreatedAt),
         links: [],
       };
       resourcesById.set(row.resourceId, resource);
@@ -1379,6 +1380,7 @@ export async function listResources(options?: {
       resourceCategory: resourceCards.category,
       resourceOwnerUserId: resourceCards.ownerUserId,
       resourceDeletedAt: resourceCards.deletedAt,
+      resourceCreatedAt: resourceCards.createdAt,
       linkId: resourceLinks.id,
       linkUrl: resourceLinks.url,
       linkLabel: resourceLinks.label,
@@ -1403,6 +1405,7 @@ export async function listResourcesIncludingDeleted(): Promise<ResourceCard[]> {
       resourceCategory: resourceCards.category,
       resourceOwnerUserId: resourceCards.ownerUserId,
       resourceDeletedAt: resourceCards.deletedAt,
+      resourceCreatedAt: resourceCards.createdAt,
       linkId: resourceLinks.id,
       linkUrl: resourceLinks.url,
       linkLabel: resourceLinks.label,

@@ -71,11 +71,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Slider } from "@/components/ui/slider";
+import { PaletteDropdown } from "@/components/palette-dropdown";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   BookOpen,
+  ChevronDown,
   ClipboardPaste,
   FilterX,
   FolderOpen,
@@ -852,9 +853,7 @@ export default function Page() {
   const {
     schemes: colorSchemes,
     currentSchemeIndex,
-    isLoading: isLoadingColorScheme,
     isSaving: isSavingColorScheme,
-    setColorSchemeByIndex,
   } = useColorScheme();
 
   const isAuthenticated = Boolean(session?.user?.id);
@@ -2283,38 +2282,6 @@ export default function Page() {
       setIsResendingVerification(false);
     }
   }, [authEmail, isResendingVerification]);
-
-  const handleColorSchemePreview = useCallback(
-    (value: number[]) => {
-      const index = value[0];
-      if (typeof index !== "number") {
-        return;
-      }
-
-      void setColorSchemeByIndex(index, { persist: false });
-    },
-    [setColorSchemeByIndex],
-  );
-
-  const handleColorSchemeCommit = useCallback(
-    (value: number[]) => {
-      const index = value[0];
-      if (typeof index !== "number") {
-        return;
-      }
-
-      void (async () => {
-        const saved = await setColorSchemeByIndex(index, { persist: true });
-        if (!saved) {
-          toast.error("Color scheme not saved", {
-            description:
-              "Preview applied locally, but we could not persist your preference.",
-          });
-        }
-      })();
-    },
-    [setColorSchemeByIndex],
-  );
 
   const handleCreateWorkspace = useCallback(async () => {
     if (!canSubmitWorkspace) {
@@ -4418,34 +4385,19 @@ export default function Page() {
 
                 <TabsContent value="appearance" className="m-0 space-y-3">
                   <div className="rounded-md border border-border/70 bg-card/50 p-3">
-                    <div className="mb-2 flex items-center justify-between gap-3 text-xs">
-                      <span className="truncate font-medium text-foreground">
-                        {activeColorScheme?.name ?? "Default"}
-                      </span>
-                      <span className="shrink-0 text-muted-foreground">
-                        {currentSchemeIndex + 1}/{colorSchemes.length}
-                      </span>
-                    </div>
-
-                    <Slider
-                      value={[currentSchemeIndex]}
-                      min={0}
-                      max={Math.max(0, colorSchemes.length - 1)}
-                      step={1}
-                      onValueChange={handleColorSchemePreview}
-                      onValueCommit={handleColorSchemeCommit}
-                      aria-label="Color scheme selector"
-                    />
-
-                    <p className="mt-2 text-xs text-muted-foreground">
+                    <PaletteDropdown align="end">
+                      <button
+                        type="button"
+                        className="mb-2 flex w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-xs ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      >
+                        <span className="truncate font-medium text-foreground">
+                          {activeColorScheme?.name ?? "Default"}
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      </button>
+                    </PaletteDropdown>
+                    <p className="text-xs text-muted-foreground">
                       {activeColorScheme?.description}
-                    </p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {isSavingColorScheme
-                        ? "Saving preference..."
-                        : isLoadingColorScheme
-                          ? "Loading preference..."
-                          : "Preference synced with database."}
                     </p>
                   </div>
                 </TabsContent>
@@ -5995,24 +5947,21 @@ export default function Page() {
                 Theme
               </p>
               <div className="rounded-md border border-border/70 bg-card/50 p-3">
-                <div className="mb-2 flex items-center justify-between gap-3 text-xs">
-                  <span className="flex items-center gap-1.5 font-medium text-foreground">
-                    <Palette className="h-3.5 w-3.5 text-primary" />
-                    {activeColorScheme?.name ?? "Default"}
-                  </span>
-                  <span className="shrink-0 text-muted-foreground">
-                    {currentSchemeIndex + 1}/{colorSchemes.length}
-                  </span>
-                </div>
-                <Slider
-                  value={[currentSchemeIndex]}
-                  min={0}
-                  max={Math.max(0, colorSchemes.length - 1)}
-                  step={1}
-                  onValueChange={handleColorSchemePreview}
-                  onValueCommit={handleColorSchemeCommit}
-                  aria-label="Color scheme selector"
-                />
+                <PaletteDropdown align="start">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-xs ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  >
+                    <span className="flex items-center gap-1.5 truncate font-medium text-foreground">
+                      <Palette className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      {activeColorScheme?.name ?? "Default"}
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                </PaletteDropdown>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {activeColorScheme?.description}
+                </p>
               </div>
             </div>
           </div>

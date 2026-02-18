@@ -6,16 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-02-18
+
 ### Added
 
 - AI Inbox quick actions for Toby-style workflows: `Group`, `Short names`, `Sort`, `Dedupe`, and `Summary`
 - New `POST /api/links/suggest-category-name` endpoint for short category naming from analyzed link clusters (AI + deterministic fallback)
 - New `POST /api/links/summarize-batch` endpoint for batch triage summaries with focus categories and recommended next actions
+- New reusable `PaletteDropdown` component with grouped light/dark theme lists and live swatch previews
 
 ### Changed
 
 - AI Inbox modal now uses unified busy-state locking across analyze/import/merge/rename/summary operations
 - AI Inbox summary panel now displays model metadata (`AI` vs fallback), focus categories, and actionable follow-up steps
+- Replaced slider-based theme selection in page settings with dropdown selectors that show the active scheme label and description
+- Theme selection now commits directly through dropdown actions while preserving persisted preference sync feedback
 
 ## [0.2.1] - 2026-02-18
 

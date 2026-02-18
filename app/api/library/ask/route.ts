@@ -7,12 +7,18 @@ import { listResourcesService } from "@/lib/resource-service"
 
 export const runtime = "nodejs"
 
+const historyTurnSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().trim().min(1).max(500),
+})
+
 const requestSchema = z.object({
   question: z.string().trim().min(2).max(500),
   workspaceId: z.string().uuid().nullable().optional(),
   category: z.string().trim().min(1).max(80).nullable().optional(),
   useAi: z.boolean().optional(),
   maxCitations: z.number().int().min(1).max(8).optional(),
+  history: z.array(historyTurnSchema).max(8).optional(),
 })
 
 function errorResponse(message: string, status: number) {
@@ -66,6 +72,7 @@ export async function POST(request: Request) {
       resources: scopedResources,
       maxCitations: input.maxCitations,
       useAi: Boolean(input.useAi && session?.user?.id),
+      history: input.history,
     })
 
     return NextResponse.json(result)

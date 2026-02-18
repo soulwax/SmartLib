@@ -7,12 +7,19 @@ const DEFAULT_PERPLEXITY_MODEL = "sonar"
 const MAX_QUESTION_LENGTH = 500
 const DEFAULT_MAX_CITATIONS = 5
 const MAX_CITATIONS = 8
+const MAX_HISTORY_ITEMS = 8
+const QUERY_CONTEXT_USER_TURN_COUNT = 2
 
 export class MissingPerplexityApiKeyError extends Error {
   constructor() {
     super("AI features are unavailable because PERPLEXITY_API_KEY is not configured.")
     this.name = "MissingPerplexityApiKeyError"
   }
+}
+
+export interface AskLibraryConversationTurn {
+  role: "user" | "assistant"
+  content: string
 }
 
 export interface AskLibraryCitation {
@@ -24,12 +31,22 @@ export interface AskLibraryCitation {
   linkLabel: string
   linkNote: string | null
   score: number
+  confidence: number
+}
+
+export interface AskLibraryReasoning {
+  summary: string
+  queryTokens: string[]
+  primaryCategories: string[]
+  averageConfidence: number
+  confidenceLabel: "low" | "medium" | "high"
 }
 
 export interface AskLibraryResult {
   question: string
   answer: string
   citations: AskLibraryCitation[]
+  reasoning: AskLibraryReasoning
   usedAi: boolean
   model: string | null
 }
@@ -39,6 +56,7 @@ interface AskLibraryInput {
   resources: ResourceCard[]
   maxCitations?: number
   useAi?: boolean
+  history?: AskLibraryConversationTurn[]
 }
 
 interface ScoredMatch {
@@ -63,6 +81,22 @@ function normalizeWhitespace(value: string): string {
 
 function normalizeQuestion(value: string): string {
   return normalizeWhitespace(value).slice(0, MAX_QUESTION_LENGTH)
+}
+
+function normalizeConversationHistory(
+  history: AskLibraryConversationTurn[] | undefined
+): AskLibraryConversationTurn[] {
+  if (!history || history.length === 0) {
+    return []
+  }
+
+  return history
+    .slice(-MAX_HISTORY_ITEMS)
+    .map((turn) => ({
+      role: turn.role,
+      content: normalizeWhitespace(turn.content).slice(0, MAX_QUESTION_LENGTH),
+    }))
+    .filter((turn) => turn.content.length > 0)
 }
 
 function tokenizeQuestion(value: string): string[] {
@@ -142,7 +176,26 @@ function scoreResource(resource: ResourceCard, tokens: string[]): ScoredMatch | 
   }
 }
 
+function buildQueryContext(question: string, history: AskLibraryConversationTurn[]): string {
+  const recentUserTurns = history
+    .filter((turn) => turn.role === "user")
+    .slice(-QUERY_CONTEXT_USER_TURN_COUNT)
+    .map((turn) => turn.content)
+
+  return normalizeWhitespace([question, ...recentUserTurns].filter(Boolean).join(" "))
+}
+
+function calculateCitationConfidence(score: number, topScore: number): number {
+  if (topScore <= 0) {
+    return 0
+  }
+
+  return Math.max(1, Math.min(100, Math.round((score / topScore) * 100)))
+}
+
 function toCitations(matches: ScoredMatch[], maxCitations: number): AskLibraryCitation[] {
+  const topScore = matches[0]?.score ?? 0
+
   return matches.slice(0, maxCitations).map((match, index) => {
     const link = match.bestLink ?? match.resource.links[0] ?? null
 
@@ -155,11 +208,58 @@ function toCitations(matches: ScoredMatch[], maxCitations: number): AskLibraryCi
       linkLabel: link?.label ?? "Resource",
       linkNote: link?.note ?? null,
       score: match.score,
+      confidence: calculateCitationConfidence(match.score, topScore),
     }
   })
 }
 
-function buildDeterministicAnswer(question: string, citations: AskLibraryCitation[]): string {
+function buildReasoning(
+  question: string,
+  queryTokens: string[],
+  citations: AskLibraryCitation[]
+): AskLibraryReasoning {
+  if (citations.length === 0) {
+    return {
+      summary:
+        "No relevant citations were found in the current scope. Try broadening your filters or question.",
+      queryTokens: queryTokens.slice(0, 8),
+      primaryCategories: [],
+      averageConfidence: 0,
+      confidenceLabel: "low",
+    }
+  }
+
+  const categories = Array.from(new Set(citations.map((citation) => citation.category))).slice(
+    0,
+    3
+  )
+  const averageConfidence = Math.round(
+    citations.reduce((acc, citation) => acc + citation.confidence, 0) /
+      citations.length
+  )
+  const confidenceLabel =
+    averageConfidence >= 75 ? "high" : averageConfidence >= 45 ? "medium" : "low"
+
+  return {
+    summary: [
+      `Matched "${question}" using ${citations.length} citation${citations.length === 1 ? "" : "s"}.`,
+      categories.length > 0 ? `Top categories: ${categories.join(", ")}.` : "",
+      `Confidence: ${confidenceLabel} (${averageConfidence}%).`,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    queryTokens: queryTokens.slice(0, 8),
+    primaryCategories: categories,
+    averageConfidence,
+    confidenceLabel,
+  }
+}
+
+function buildDeterministicAnswer(
+  question: string,
+  citations: AskLibraryCitation[],
+  hasHistory: boolean
+): string {
   if (citations.length === 0) {
     return "I couldn't find relevant matches in this scope. Try a broader question or remove filters."
   }
@@ -172,8 +272,10 @@ function buildDeterministicAnswer(question: string, citations: AskLibraryCitatio
     .map((citation) => `[${citation.index}] ${citation.linkLabel}`)
     .join(", ")
 
+  const contextPrefix = hasHistory ? "Using your recent follow-up context, " : ""
+
   return [
-    `For "${question}", I found ${citations.length} relevant match${citations.length === 1 ? "" : "es"}${categoryText ? ` in ${categoryText}` : ""}.`,
+    `${contextPrefix}for "${question}", I found ${citations.length} relevant match${citations.length === 1 ? "" : "es"}${categoryText ? ` in ${categoryText}` : ""}.`,
     `Start with ${topReferences}.`,
   ].join(" ")
 }
@@ -218,7 +320,8 @@ function extractAssistantText(payload: unknown): string {
 
 async function generateAiAnswer(
   question: string,
-  citations: AskLibraryCitation[]
+  citations: AskLibraryCitation[],
+  history: AskLibraryConversationTurn[]
 ): Promise<{ answer: string; model: string }> {
   const apiKey = getPerplexityApiKey()
   const model = DEFAULT_PERPLEXITY_MODEL
@@ -240,6 +343,16 @@ async function generateAiAnswer(
     })
     .join("\n")
 
+  const conversationDigest =
+    history.length > 0
+      ? history
+          .map((turn, index) => {
+            const speaker = turn.role === "user" ? "User" : "Assistant"
+            return `${speaker} ${index + 1}: ${turn.content}`
+          })
+          .join("\n")
+      : ""
+
   const response = await fetch(PERPLEXITY_API_URL, {
     method: "POST",
     headers: {
@@ -260,6 +373,9 @@ async function generateAiAnswer(
           role: "user",
           content: [
             `Question: ${question}`,
+            ...(conversationDigest
+              ? ["", "Recent conversation:", conversationDigest]
+              : []),
             "",
             "Citations:",
             citationDigest,
@@ -292,12 +408,14 @@ export async function askLibraryQuestion(
   input: AskLibraryInput
 ): Promise<AskLibraryResult> {
   const question = normalizeQuestion(input.question)
+  const history = normalizeConversationHistory(input.history)
   const maxCitations = Math.min(
     MAX_CITATIONS,
     Math.max(1, input.maxCitations ?? DEFAULT_MAX_CITATIONS)
   )
 
-  const tokens = tokenizeQuestion(question)
+  const queryContext = buildQueryContext(question, history)
+  const tokens = tokenizeQuestion(queryContext)
   const scoredMatches = input.resources
     .map((resource) => scoreResource(resource, tokens))
     .filter((item): item is ScoredMatch => item !== null)
@@ -306,12 +424,14 @@ export async function askLibraryQuestion(
   const citations = toCitations(scoredMatches, maxCitations).filter(
     (citation) => citation.linkUrl.trim().length > 0
   )
+  const reasoning = buildReasoning(question, tokens, citations)
 
   if (citations.length === 0) {
     return {
       question,
-      answer: buildDeterministicAnswer(question, citations),
+      answer: buildDeterministicAnswer(question, citations, history.length > 0),
       citations,
+      reasoning,
       usedAi: false,
       model: null,
     }
@@ -319,11 +439,12 @@ export async function askLibraryQuestion(
 
   if (input.useAi) {
     try {
-      const aiResult = await generateAiAnswer(question, citations)
+      const aiResult = await generateAiAnswer(question, citations, history)
       return {
         question,
         answer: aiResult.answer,
         citations,
+        reasoning,
         usedAi: true,
         model: aiResult.model,
       }
@@ -334,8 +455,9 @@ export async function askLibraryQuestion(
 
   return {
     question,
-    answer: buildDeterministicAnswer(question, citations),
+    answer: buildDeterministicAnswer(question, citations, history.length > 0),
     citations,
+    reasoning,
     usedAi: false,
     model: null,
   }

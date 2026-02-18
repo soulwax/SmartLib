@@ -35,6 +35,7 @@ import {
   listResourcesIncludingDeleted as listDbResourcesIncludingDeleted,
   listResourceWorkspaces as listDbResourceWorkspaces,
   listResources as listDbResources,
+  mergeDuplicateResourceCategories as mergeDbDuplicateResourceCategories,
   renameResourceWorkspace as renameDbResourceWorkspace,
   updateResourceCategory as updateDbResourceCategory,
   restoreResource as restoreDbResource,
@@ -83,6 +84,7 @@ async function ensureDatabaseBootstrapped() {
     if (firstAdminUserId) {
       await backfillDbResourceOwnershipToFirstAdmin(firstAdminUserId)
     }
+    await mergeDbDuplicateResourceCategories()
 
     const hasExistingResources = await hasAnyDbResources()
     if (hasExistingResources) {
@@ -103,6 +105,7 @@ async function ensureDatabaseBootstrapped() {
     if (firstAdminUserId) {
       await backfillDbResourceOwnershipToFirstAdmin(firstAdminUserId)
     }
+    await mergeDbDuplicateResourceCategories()
   })()
 
   try {

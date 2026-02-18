@@ -333,7 +333,8 @@ export async function ensureSchema() {
           (
             SELECT assigned.workspace_id
             FROM resource_categories AS assigned
-            WHERE lower(assigned.name) = lower(card.category)
+            WHERE lower(regexp_replace(btrim(assigned.name), '[[:space:]]+', ' ', 'g')) =
+                  lower(regexp_replace(btrim(card.category), '[[:space:]]+', ' ', 'g'))
             ORDER BY assigned.created_at ASC
             LIMIT 1
           ),

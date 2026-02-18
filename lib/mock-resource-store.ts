@@ -16,7 +16,6 @@ import type {
 } from "@/lib/resources"
 import { DEFAULT_CATEGORY_SUGGESTIONS } from "@/lib/resources"
 import {
-  ResourceCategoryAlreadyExistsError,
   ResourceCategoryNotFoundError,
   ResourceNotFoundError,
   ResourceWorkspaceAlreadyExistsError,
@@ -81,6 +80,10 @@ function normalizeCategoryName(value: string): string {
   return value.replace(/\s+/g, " ").trim()
 }
 
+function normalizeCategoryNameLower(value: string): string {
+  return normalizeCategoryName(value).toLowerCase()
+}
+
 function normalizeCategorySymbol(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
     return null
@@ -92,6 +95,42 @@ function normalizeCategorySymbol(value: string | null | undefined): string | nul
   }
 
   return normalized.slice(0, 16)
+}
+
+function normalizeTimestampToMs(value: string | null | undefined): number {
+  if (!value) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
+}
+
+function compareCategoriesForCanonical(
+  left: ResourceCategory,
+  right: ResourceCategory
+): number {
+  const leftTs = normalizeTimestampToMs(left.createdAt)
+  const rightTs = normalizeTimestampToMs(right.createdAt)
+  if (leftTs !== rightTs) {
+    return leftTs - rightTs
+  }
+
+  return left.id.localeCompare(right.id)
+}
+
+interface MockCategoryMergeOptions {
+  includeCategoryIds?: string[]
+  preferredSymbol?: string | null
+  symbolExplicit?: boolean
+  preferredOwnerUserId?: string | null
+  preferProvidedName?: boolean
+}
+
+interface MockCategoryMergeOutcome {
+  category: ResourceCategory
+  mergedCategoryIds: string[]
+  updatedResources: number
 }
 
 function normalizeAuditActor(actor?: ResourceAuditActor): {
@@ -172,6 +211,153 @@ function requireVisibleWorkspace(
   return workspace
 }
 
+function resolveMergedMockCategoryFields(
+  categories: ResourceCategory[],
+  canonical: ResourceCategory,
+  normalizedName: string,
+  options?: MockCategoryMergeOptions
+): { name: string; symbol: string | null; ownerUserId: string | null } {
+  // Keep mock-mode behavior aligned with database-mode merge resolution.
+  const sorted = [...categories].sort(compareCategoriesForCanonical)
+  const canonicalSymbol = normalizeCategorySymbol(canonical.symbol)
+  const canonicalOwnerUserId = normalizeActorUserId(canonical.ownerUserId)
+  const preferredSymbol = normalizeCategorySymbol(options?.preferredSymbol)
+  const preferredOwnerUserId = normalizeActorUserId(options?.preferredOwnerUserId)
+  const firstAvailableSymbol =
+    sorted
+      .map((category) => normalizeCategorySymbol(category.symbol))
+      .find((value) => value !== null) ?? null
+  const firstAvailableOwnerUserId =
+    sorted
+      .map((category) => normalizeActorUserId(category.ownerUserId))
+      .find((value) => value !== null) ?? null
+
+  return {
+    name: options?.preferProvidedName
+      ? normalizedName
+      : normalizeCategoryName(canonical.name),
+    symbol: options?.symbolExplicit
+      ? preferredSymbol
+      : canonicalSymbol ?? preferredSymbol ?? firstAvailableSymbol,
+    ownerUserId:
+      canonicalOwnerUserId ?? firstAvailableOwnerUserId ?? preferredOwnerUserId,
+  }
+}
+
+function mergeMockCategoriesInWorkspaceByNormalizedName(
+  workspaceId: string,
+  name: string,
+  options?: MockCategoryMergeOptions
+): MockCategoryMergeOutcome | null {
+  const normalizedName = normalizeCategoryName(name)
+  const normalizedNameLower = normalizeCategoryNameLower(normalizedName)
+  if (!normalizedName) {
+    return null
+  }
+
+  const includeCategoryIdSet = new Set(
+    (options?.includeCategoryIds ?? [])
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+  )
+  const categories = (mockCategories ?? []).filter(
+    (category) =>
+      category.workspaceId === workspaceId &&
+      (normalizeCategoryNameLower(category.name) === normalizedNameLower ||
+        includeCategoryIdSet.has(category.id))
+  )
+
+  if (categories.length === 0) {
+    return null
+  }
+
+  const sortedCategories = [...categories].sort(compareCategoriesForCanonical)
+  const preferredCanonical =
+    sortedCategories.find((category) => includeCategoryIdSet.has(category.id)) ??
+    null
+  const canonical = preferredCanonical ?? sortedCategories[0]
+  const resolved = resolveMergedMockCategoryFields(
+    sortedCategories,
+    canonical,
+    normalizedName,
+    options
+  )
+  const normalizedCategoryKeySet = new Set(
+    [
+      normalizedNameLower,
+      ...sortedCategories
+        .map((category) => normalizeCategoryNameLower(category.name))
+        .filter((key) => key.length > 0),
+    ]
+  )
+
+  const canonicalNeedsUpdate =
+    normalizeCategoryName(canonical.name) !== resolved.name ||
+    normalizeCategorySymbol(canonical.symbol) !== resolved.symbol ||
+    normalizeActorUserId(canonical.ownerUserId) !== resolved.ownerUserId
+  const duplicateIds = sortedCategories
+    .filter((category) => category.id !== canonical.id)
+    .map((category) => category.id)
+  const duplicateIdSet = new Set(duplicateIds)
+
+  if (canonicalNeedsUpdate || duplicateIds.length > 0) {
+    mockCategories = (mockCategories ?? []).map((category) => {
+      if (category.id !== canonical.id) {
+        return category
+      }
+
+      return {
+        ...category,
+        name: resolved.name,
+        symbol: resolved.symbol,
+        ownerUserId: resolved.ownerUserId,
+        updatedAt: new Date().toISOString(),
+      }
+    })
+  }
+
+  if (duplicateIds.length > 0) {
+    mockCategories = (mockCategories ?? []).filter(
+      (category) => !duplicateIdSet.has(category.id)
+    )
+  }
+
+  let updatedResources = 0
+  mockStore = (mockStore ?? []).map((resource) => {
+    if (resource.workspaceId !== workspaceId) {
+      return resource
+    }
+
+    if (!normalizedCategoryKeySet.has(normalizeCategoryNameLower(resource.category))) {
+      return resource
+    }
+
+    if (
+      resource.category === resolved.name &&
+      (resource.ownerUserId ?? null) === resolved.ownerUserId
+    ) {
+      return resource
+    }
+
+    updatedResources += 1
+    return {
+      ...resource,
+      category: resolved.name,
+      ownerUserId: resolved.ownerUserId,
+    }
+  })
+
+  const canonicalAfterMerge =
+    (mockCategories ?? []).find((category) => category.id === canonical.id) ??
+    canonical
+
+  return {
+    category: canonicalAfterMerge,
+    mergedCategoryIds: duplicateIds,
+    updatedResources,
+  }
+}
+
 function ensureMockCategoryByName(
   name: string,
   workspaceId: string,
@@ -184,19 +370,16 @@ function ensureMockCategoryByName(
     throw new Error("Category name is required.")
   }
 
-  const existing = (mockCategories ?? []).find(
-    (category) =>
-      category.workspaceId === workspaceId &&
-      category.name.toLowerCase() === normalizedName.toLowerCase()
-  )
-
-  if (existing) {
-    if (!existing.ownerUserId && normalizedOwnerUserId) {
-      existing.ownerUserId = normalizedOwnerUserId
-      existing.updatedAt = new Date().toISOString()
+  const merged = mergeMockCategoriesInWorkspaceByNormalizedName(
+    workspaceId,
+    normalizedName,
+    {
+      preferredOwnerUserId: normalizedOwnerUserId,
+      symbolExplicit: false,
     }
-
-    return existing
+  )
+  if (merged) {
+    return merged.category
   }
 
   const nextCategory: ResourceCategory = {
@@ -267,9 +450,46 @@ function ensureMockStore() {
         workspaceId: mainWorkspace.id,
         name,
         ownerUserId: null,
+        symbol: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }))
+  }
+
+  mergeAllMockDuplicateCategories()
+}
+
+function mergeAllMockDuplicateCategories() {
+  const groups = new Map<
+    string,
+    {
+      workspaceId: string
+      normalizedName: string
+    }
+  >()
+
+  for (const category of mockCategories ?? []) {
+    const normalizedName = normalizeCategoryName(category.name)
+    if (!normalizedName) {
+      continue
+    }
+
+    const key = `${category.workspaceId}:${normalizeCategoryNameLower(normalizedName)}`
+    if (groups.has(key)) {
+      continue
+    }
+
+    groups.set(key, {
+      workspaceId: category.workspaceId,
+      normalizedName,
+    })
+  }
+
+  for (const group of groups.values()) {
+    mergeMockCategoriesInWorkspaceByNormalizedName(
+      group.workspaceId,
+      group.normalizedName
+    )
   }
 }
 
@@ -539,14 +759,18 @@ export async function createMockResourceCategory(
   )
 
   const normalizedName = normalizeCategoryName(name)
-  const existing = (mockCategories ?? []).find(
-    (category) =>
-      category.workspaceId === workspace.id &&
-      category.name.toLowerCase() === normalizedName.toLowerCase()
+  const normalizedSymbol = normalizeCategorySymbol(symbol)
+  const merged = mergeMockCategoriesInWorkspaceByNormalizedName(
+    workspace.id,
+    normalizedName,
+    {
+      preferredSymbol: normalizedSymbol,
+      symbolExplicit: false,
+      preferredOwnerUserId: options?.ownerUserId ?? workspace.ownerUserId ?? null,
+    }
   )
-
-  if (existing) {
-    throw new ResourceCategoryAlreadyExistsError(normalizedName)
+  if (merged) {
+    return cloneCategory(merged.category)
   }
 
   const created = ensureMockCategoryByName(
@@ -554,7 +778,7 @@ export async function createMockResourceCategory(
     workspace.id,
     options?.ownerUserId ?? workspace.ownerUserId ?? null
   )
-  created.symbol = normalizeCategorySymbol(symbol)
+  created.symbol = normalizedSymbol
   created.updatedAt = new Date().toISOString()
   return cloneCategory(created)
 }
@@ -597,44 +821,31 @@ export async function updateMockResourceCategory(
     throw new Error("Category name is required.")
   }
 
-  const duplicate = (mockCategories ?? []).find(
-    (item) =>
-      item.id !== categoryId &&
-      item.workspaceId === category.workspaceId &&
-      item.name.toLowerCase() === normalizedName.toLowerCase()
-  )
-  if (duplicate) {
-    throw new ResourceCategoryAlreadyExistsError(normalizedName)
-  }
+  if (input.name !== undefined) {
+    const merged = mergeMockCategoriesInWorkspaceByNormalizedName(
+      category.workspaceId,
+      normalizedName,
+      {
+        includeCategoryIds: [categoryId],
+        preferredSymbol: normalizedSymbol,
+        symbolExplicit: input.symbol !== undefined,
+        preferProvidedName: true,
+      }
+    )
+    if (!merged) {
+      throw new ResourceCategoryNotFoundError(categoryId)
+    }
 
-  const didNameChange = normalizedName !== normalizedExistingName
+    return cloneCategory(merged.category)
+  }
 
   const next = [...(mockCategories ?? [])]
   next[index] = {
     ...next[index],
-    name: normalizedName,
     symbol: normalizedSymbol,
     updatedAt: new Date().toISOString(),
   }
   mockCategories = next
-
-  if (didNameChange) {
-    mockStore = (mockStore ?? []).map((resource) => {
-      if (resource.workspaceId !== category.workspaceId) {
-        return resource
-      }
-
-      if (resource.category.toLowerCase() !== normalizedExistingName.toLowerCase()) {
-        return resource
-      }
-
-      return {
-        ...resource,
-        category: normalizedName,
-        ownerUserId: next[index].ownerUserId ?? null,
-      }
-    })
-  }
 
   return cloneCategory(next[index])
 }
@@ -691,12 +902,13 @@ export async function deleteMockResourceCategory(
   )
 
   let reassignedResources = 0
+  const normalizedDeletedName = normalizeCategoryNameLower(existing.name)
   mockStore = (mockStore ?? []).map((resource) => {
     if (resource.workspaceId !== existing.workspaceId) {
       return resource
     }
 
-    if (resource.category.toLowerCase() !== existing.name.toLowerCase()) {
+    if (normalizeCategoryNameLower(resource.category) !== normalizedDeletedName) {
       return resource
     }
 

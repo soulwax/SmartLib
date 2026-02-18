@@ -161,6 +161,10 @@ function normalizeCategoryName(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function normalizeCategoryNameLower(value: string): string {
+  return normalizeCategoryName(value).toLowerCase();
+}
+
 function normalizeCategorySymbol(
   value: string | null | undefined,
 ): string | null {
@@ -174,6 +178,16 @@ function normalizeCategorySymbol(
   }
 
   return normalized.slice(0, 16);
+}
+
+function normalizeTimestampToMs(value: Date | string | null | undefined): number {
+  if (!value) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsed =
+    value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 function normalizeTagName(value: string): string {
@@ -204,6 +218,45 @@ function normalizeCategoryRow(row: ResourceCategoryRow): ResourceCategory {
     createdAt: normalizeTimestamp(row.createdAt) ?? new Date(0).toISOString(),
     updatedAt: normalizeTimestamp(row.updatedAt) ?? new Date(0).toISOString(),
   };
+}
+
+function compareCategoryRowsForCanonical(
+  left: ResourceCategoryRow,
+  right: ResourceCategoryRow,
+): number {
+  const leftTs = normalizeTimestampToMs(left.createdAt);
+  const rightTs = normalizeTimestampToMs(right.createdAt);
+  if (leftTs !== rightTs) {
+    return leftTs - rightTs;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function normalizedCategorySql(
+  column: typeof resourceCategories.name | typeof resourceCards.category,
+) {
+  return sql`lower(regexp_replace(btrim(${column}), '[[:space:]]+', ' ', 'g'))`;
+}
+
+interface CategoryMergeOptions {
+  includeCategoryIds?: string[];
+  preferredSymbol?: string | null;
+  symbolExplicit?: boolean;
+  preferredOwnerUserId?: string | null;
+  preferProvidedName?: boolean;
+}
+
+interface CategoryMergeOutcome {
+  category: ResourceCategory;
+  mergedCategoryIds: string[];
+  updatedResources: number;
+}
+
+export interface MergeDuplicateCategoriesSummary {
+  processedGroups: number;
+  mergedCategories: number;
+  updatedResources: number;
 }
 
 function isValidUuid(value: string): boolean {
@@ -649,6 +702,10 @@ async function findCategoryByNameInWorkspace(
   workspaceId: string,
 ): Promise<ResourceCategory | null> {
   const db = getDb();
+  const normalizedName = normalizeCategoryName(name);
+  if (!normalizedName) {
+    return null;
+  }
 
   const rows = await db
     .select({
@@ -664,9 +721,10 @@ async function findCategoryByNameInWorkspace(
     .where(
       and(
         eq(resourceCategories.workspaceId, workspaceId),
-        sql`lower(${resourceCategories.name}) = ${name.toLowerCase()}`,
+        sql`${normalizedCategorySql(resourceCategories.name)} = ${normalizeCategoryNameLower(normalizedName)}`,
       ),
     )
+    .orderBy(asc(resourceCategories.createdAt), asc(resourceCategories.id))
     .limit(1);
 
   if (rows.length === 0) {
@@ -674,6 +732,188 @@ async function findCategoryByNameInWorkspace(
   }
 
   return normalizeCategoryRow(rows[0] as ResourceCategoryRow);
+}
+
+function resolveMergedCategoryFields(
+  categories: ResourceCategoryRow[],
+  canonical: ResourceCategoryRow,
+  normalizedName: string,
+  options?: CategoryMergeOptions,
+): { name: string; symbol: string | null; ownerUserId: string | null } {
+  // Conflict strategy:
+  // 1) Canonical row = oldest category in the normalized-name cluster
+  //    unless a rename explicitly includes a source category ID (that row stays canonical).
+  // 2) Name defaults to canonical normalized name; explicit rename can override it.
+  // 3) Symbol prefers explicit update input, then canonical symbol, then first non-empty symbol in the cluster.
+  // 4) Owner prefers canonical owner, then first non-null owner in the cluster, then optional preferred owner.
+  const sorted = [...categories].sort(compareCategoryRowsForCanonical);
+  const canonicalSymbol = normalizeCategorySymbol(canonical.symbol);
+  const canonicalOwnerUserId = normalizeActorUserId(canonical.ownerUserId);
+  const preferredSymbol = normalizeCategorySymbol(options?.preferredSymbol);
+  const preferredOwnerUserId = normalizeActorUserId(options?.preferredOwnerUserId);
+  const firstAvailableSymbol =
+    sorted
+      .map((category) => normalizeCategorySymbol(category.symbol))
+      .find((value) => value !== null) ?? null;
+  const firstAvailableOwnerUserId =
+    sorted
+      .map((category) => normalizeActorUserId(category.ownerUserId))
+      .find((value) => value !== null) ?? null;
+
+  return {
+    name: options?.preferProvidedName
+      ? normalizedName
+      : normalizeCategoryName(canonical.name),
+    symbol: options?.symbolExplicit
+      ? preferredSymbol
+      : canonicalSymbol ?? preferredSymbol ?? firstAvailableSymbol,
+    ownerUserId:
+      canonicalOwnerUserId ?? firstAvailableOwnerUserId ?? preferredOwnerUserId,
+  };
+}
+
+async function mergeCategoriesInWorkspaceByNormalizedName(
+  workspaceId: string,
+  name: string,
+  options?: CategoryMergeOptions,
+): Promise<CategoryMergeOutcome | null> {
+  const db = getDb();
+  const normalizedName = normalizeCategoryName(name);
+  const normalizedNameLower = normalizeCategoryNameLower(normalizedName);
+  if (!normalizedName) {
+    return null;
+  }
+
+  const includeCategoryIds = [
+    ...new Set(
+      (options?.includeCategoryIds ?? [])
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    ),
+  ];
+  const normalizedCondition =
+    sql`${normalizedCategorySql(resourceCategories.name)} = ${normalizedNameLower}`;
+  const whereCondition =
+    includeCategoryIds.length > 0
+      ? and(
+          eq(resourceCategories.workspaceId, workspaceId),
+          or(
+            normalizedCondition,
+            inArray(resourceCategories.id, includeCategoryIds),
+          ),
+        )
+      : and(eq(resourceCategories.workspaceId, workspaceId), normalizedCondition);
+
+  const rows = await db
+    .select({
+      id: resourceCategories.id,
+      workspaceId: resourceCategories.workspaceId,
+      name: resourceCategories.name,
+      symbol: resourceCategories.symbol,
+      ownerUserId: resourceCategories.ownerUserId,
+      createdAt: resourceCategories.createdAt,
+      updatedAt: resourceCategories.updatedAt,
+    })
+    .from(resourceCategories)
+    .where(whereCondition)
+    .orderBy(asc(resourceCategories.createdAt), asc(resourceCategories.id));
+
+  const matchingRows = (rows as ResourceCategoryRow[]).sort(
+    compareCategoryRowsForCanonical,
+  );
+  if (matchingRows.length === 0) {
+    return null;
+  }
+
+  const preferredCategoryIdSet = new Set(includeCategoryIds);
+  const preferredCanonical =
+    matchingRows.find((category) => preferredCategoryIdSet.has(category.id)) ??
+    null;
+  const canonical = preferredCanonical ?? matchingRows[0];
+  const resolved = resolveMergedCategoryFields(
+    matchingRows,
+    canonical,
+    normalizedName,
+    options,
+  );
+  const normalizedCategoryKeys = [
+    ...new Set([
+      normalizedNameLower,
+      ...matchingRows
+        .map((category) => normalizeCategoryNameLower(category.name))
+        .filter((key) => key.length > 0),
+    ]),
+  ];
+  const resourceCategoryMatchCondition =
+    normalizedCategoryKeys.length === 1
+      ? sql`${normalizedCategorySql(resourceCards.category)} = ${normalizedCategoryKeys[0]}`
+      : sql`${normalizedCategorySql(resourceCards.category)} IN (${sql.join(
+          normalizedCategoryKeys.map((key) => sql`${key}`),
+          sql`, `,
+        )})`;
+
+  let canonicalRow = canonical;
+  const canonicalNeedsUpdate =
+    normalizeCategoryName(canonical.name) !== resolved.name ||
+    normalizeCategorySymbol(canonical.symbol) !== resolved.symbol ||
+    normalizeActorUserId(canonical.ownerUserId) !== resolved.ownerUserId;
+
+  if (canonicalNeedsUpdate) {
+    const updatedRows = await db
+      .update(resourceCategories)
+      .set({
+        name: resolved.name,
+        symbol: resolved.symbol,
+        ownerUserId: resolved.ownerUserId,
+        updatedAt: sql`NOW()`,
+      })
+      .where(eq(resourceCategories.id, canonical.id))
+      .returning({
+        id: resourceCategories.id,
+        workspaceId: resourceCategories.workspaceId,
+        name: resourceCategories.name,
+        symbol: resourceCategories.symbol,
+        ownerUserId: resourceCategories.ownerUserId,
+        createdAt: resourceCategories.createdAt,
+        updatedAt: resourceCategories.updatedAt,
+      });
+
+    canonicalRow = (updatedRows[0] as ResourceCategoryRow | undefined) ?? canonical;
+  }
+
+  const resourceRows = await db
+    .update(resourceCards)
+    .set({
+      category: resolved.name,
+      ownerUserId: resolved.ownerUserId,
+      updatedAt: sql`NOW()`,
+    })
+    .where(
+      and(
+        eq(resourceCards.workspaceId, workspaceId),
+        resourceCategoryMatchCondition,
+        or(
+          sql`${resourceCards.category} IS DISTINCT FROM ${resolved.name}`,
+          sql`${resourceCards.ownerUserId} IS DISTINCT FROM ${resolved.ownerUserId}`,
+        ),
+      ),
+    )
+    .returning({ id: resourceCards.id });
+
+  const duplicateIds = matchingRows
+    .filter((category) => category.id !== canonicalRow.id)
+    .map((category) => category.id);
+  if (duplicateIds.length > 0) {
+    await db
+      .delete(resourceCategories)
+      .where(inArray(resourceCategories.id, duplicateIds));
+  }
+
+  return {
+    category: normalizeCategoryRow(canonicalRow),
+    mergedCategoryIds: duplicateIds,
+    updatedResources: resourceRows.length,
+  };
 }
 
 async function ensureCategoryByName(
@@ -689,6 +929,19 @@ async function ensureCategoryByName(
 
   if (!normalizedName) {
     throw new Error("Category name is required.");
+  }
+
+  const mergedExisting = await mergeCategoriesInWorkspaceByNormalizedName(
+    workspaceId,
+    normalizedName,
+    {
+      preferredSymbol: normalizedSymbol,
+      symbolExplicit: false,
+      preferredOwnerUserId: normalizedOwnerUserId,
+    },
+  );
+  if (mergedExisting) {
+    return mergedExisting.category;
   }
 
   try {
@@ -720,52 +973,25 @@ async function ensureCategoryByName(
     }
   }
 
-  const existing = await findCategoryByNameInWorkspace(
-    normalizedName,
+  const mergedAfterConflict = await mergeCategoriesInWorkspaceByNormalizedName(
     workspaceId,
+    normalizedName,
+    {
+      preferredSymbol: normalizedSymbol,
+      symbolExplicit: false,
+      preferredOwnerUserId: normalizedOwnerUserId,
+    },
   );
-  if (!existing) {
-    throw new Error("Failed to resolve category.");
+  if (mergedAfterConflict) {
+    return mergedAfterConflict.category;
   }
 
-  if (!existing.ownerUserId && normalizedOwnerUserId) {
-    const rows = await db
-      .update(resourceCategories)
-      .set({
-        ownerUserId: normalizedOwnerUserId,
-        updatedAt: sql`NOW()`,
-      })
-      .where(eq(resourceCategories.id, existing.id))
-      .returning({
-        id: resourceCategories.id,
-        workspaceId: resourceCategories.workspaceId,
-        name: resourceCategories.name,
-        symbol: resourceCategories.symbol,
-        ownerUserId: resourceCategories.ownerUserId,
-        createdAt: resourceCategories.createdAt,
-        updatedAt: resourceCategories.updatedAt,
-      });
-
-    const updated = rows[0];
-    if (updated) {
-      await db
-        .update(resourceCards)
-        .set({
-          ownerUserId: normalizedOwnerUserId,
-          updatedAt: sql`NOW()`,
-        })
-        .where(
-          and(
-            eq(resourceCards.workspaceId, workspaceId),
-            sql`lower(${resourceCards.category}) = ${normalizedName.toLowerCase()}`,
-          ),
-        );
-
-      return normalizeCategoryRow(updated as ResourceCategoryRow);
-    }
+  const existing = await findCategoryByNameInWorkspace(normalizedName, workspaceId);
+  if (existing) {
+    return existing;
   }
 
-  return existing;
+  throw new Error("Failed to resolve category.");
 }
 
 async function ensureTagsByName(tagNames: string[]): Promise<string[]> {
@@ -1177,7 +1403,6 @@ export async function createResourceCategory(
   },
 ): Promise<ResourceCategory> {
   await ensureSchema();
-  const db = getDb();
 
   const normalizedName = normalizeCategoryName(name);
   const normalizedSymbol = normalizeCategorySymbol(symbol);
@@ -1193,38 +1418,12 @@ export async function createResourceCategory(
     { includeAllWorkspaces: options?.includeAllWorkspaces },
   );
 
-  try {
-    const rows = await db
-      .insert(resourceCategories)
-      .values({
-        workspaceId: workspace.id,
-        name: normalizedName,
-        symbol: normalizedSymbol,
-        ownerUserId: normalizedOwnerUserId ?? workspace.ownerUserId ?? null,
-      })
-      .returning({
-        id: resourceCategories.id,
-        workspaceId: resourceCategories.workspaceId,
-        name: resourceCategories.name,
-        symbol: resourceCategories.symbol,
-        ownerUserId: resourceCategories.ownerUserId,
-        createdAt: resourceCategories.createdAt,
-        updatedAt: resourceCategories.updatedAt,
-      });
-
-    const created = rows[0];
-    if (!created) {
-      throw new Error("Failed to create category.");
-    }
-
-    return normalizeCategoryRow(created as ResourceCategoryRow);
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new ResourceCategoryAlreadyExistsError(normalizedName);
-    }
-
-    throw error;
-  }
+  return ensureCategoryByName(
+    normalizedName,
+    workspace.id,
+    normalizedSymbol,
+    normalizedOwnerUserId ?? workspace.ownerUserId ?? null,
+  );
 }
 
 export async function updateResourceCategory(
@@ -1254,55 +1453,45 @@ export async function updateResourceCategory(
     throw new Error("Category name is required.");
   }
 
-  const didNameChange = normalizedName !== normalizedExistingName;
+  if (input.name !== undefined) {
+    const merged = await mergeCategoriesInWorkspaceByNormalizedName(
+      existing.workspaceId,
+      normalizedName,
+      {
+        includeCategoryIds: [existing.id],
+        preferredSymbol: normalizedSymbol,
+        symbolExplicit: input.symbol !== undefined,
+        preferProvidedName: true,
+      },
+    );
 
-  let updated: ResourceCategoryRow | undefined;
-  try {
-    const rows = await db
-      .update(resourceCategories)
-      .set({
-        name: normalizedName,
-        symbol: normalizedSymbol,
-        updatedAt: sql`NOW()`,
-      })
-      .where(eq(resourceCategories.id, categoryId))
-      .returning({
-        id: resourceCategories.id,
-        workspaceId: resourceCategories.workspaceId,
-        name: resourceCategories.name,
-        symbol: resourceCategories.symbol,
-        ownerUserId: resourceCategories.ownerUserId,
-        createdAt: resourceCategories.createdAt,
-        updatedAt: resourceCategories.updatedAt,
-      });
-
-    updated = rows[0] as ResourceCategoryRow | undefined;
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new ResourceCategoryAlreadyExistsError(normalizedName);
+    if (!merged) {
+      throw new ResourceCategoryNotFoundError(categoryId);
     }
 
-    throw error;
+    return merged.category;
   }
 
+  const rows = await db
+    .update(resourceCategories)
+    .set({
+      symbol: normalizedSymbol,
+      updatedAt: sql`NOW()`,
+    })
+    .where(eq(resourceCategories.id, categoryId))
+    .returning({
+      id: resourceCategories.id,
+      workspaceId: resourceCategories.workspaceId,
+      name: resourceCategories.name,
+      symbol: resourceCategories.symbol,
+      ownerUserId: resourceCategories.ownerUserId,
+      createdAt: resourceCategories.createdAt,
+      updatedAt: resourceCategories.updatedAt,
+    });
+
+  const updated = rows[0] as ResourceCategoryRow | undefined;
   if (!updated) {
     throw new ResourceCategoryNotFoundError(categoryId);
-  }
-
-  if (didNameChange) {
-    await db
-      .update(resourceCards)
-      .set({
-        category: updated.name,
-        ownerUserId: updated.ownerUserId ?? null,
-        updatedAt: sql`NOW()`,
-      })
-      .where(
-        and(
-          eq(resourceCards.workspaceId, updated.workspaceId),
-          sql`lower(${resourceCards.category}) = ${normalizedExistingName.toLowerCase()}`,
-        ),
-      );
   }
 
   return normalizeCategoryRow(updated);
@@ -1340,7 +1529,7 @@ export async function deleteResourceCategory(
     { includeAllWorkspaces: options?.includeAllWorkspaces },
   );
   const deletedCategory = normalizeCategoryRow(existing);
-  const normalizedDeletedName = deletedCategory.name.toLowerCase();
+  const normalizedDeletedName = normalizeCategoryNameLower(deletedCategory.name);
 
   const fallbackName =
     normalizedDeletedName === DEFAULT_RESOURCE_CATEGORY_NAME.toLowerCase()
@@ -1363,7 +1552,7 @@ export async function deleteResourceCategory(
     .where(
       and(
         eq(resourceCards.workspaceId, deletedCategory.workspaceId),
-        sql`lower(${resourceCards.category}) = ${normalizedDeletedName}`,
+        sql`${normalizedCategorySql(resourceCards.category)} = ${normalizedDeletedName}`,
       ),
     )
     .returning({ id: resourceCards.id });
@@ -1518,7 +1707,7 @@ export async function createResource(
     .insert(resourceCards)
     .values({
       workspaceId: workspace.id,
-      category: categoryName,
+      category: category.name,
       ownerUserId: category.ownerUserId ?? null,
     })
     .returning({
@@ -1597,7 +1786,7 @@ export async function updateResource(
     .update(resourceCards)
     .set({
       workspaceId: workspace.id,
-      category: categoryName,
+      category: category.name,
       ownerUserId: category.ownerUserId ?? null,
       updatedAt: sql`NOW()`,
     })
@@ -1776,7 +1965,7 @@ export async function updateResourceCategoryOwner(
     .where(
       and(
         eq(resourceCards.workspaceId, updatedCategory.workspaceId),
-        sql`lower(${resourceCards.category}) = ${updatedCategory.name.toLowerCase()}`,
+        sql`${normalizedCategorySql(resourceCards.category)} = ${normalizeCategoryNameLower(updatedCategory.name)}`,
       ),
     )
     .returning({ id: resourceCards.id });
@@ -1784,6 +1973,74 @@ export async function updateResourceCategoryOwner(
   return {
     category: normalizeCategoryRow(updatedCategory as ResourceCategoryRow),
     updatedResources: updatedResources.length,
+  };
+}
+
+export async function mergeDuplicateResourceCategories(options?: {
+  workspaceId?: string | null;
+}): Promise<MergeDuplicateCategoriesSummary> {
+  await ensureSchema();
+  const db = getDb();
+  const normalizedWorkspaceId = options?.workspaceId?.trim() || null;
+
+  const baseQuery = db
+    .select({
+      workspaceId: resourceCategories.workspaceId,
+      name: resourceCategories.name,
+    })
+    .from(resourceCategories)
+    .orderBy(asc(resourceCategories.workspaceId), asc(resourceCategories.createdAt));
+  const rows = normalizedWorkspaceId
+    ? await baseQuery.where(eq(resourceCategories.workspaceId, normalizedWorkspaceId))
+    : await baseQuery;
+
+  const groups = new Map<
+    string,
+    {
+      workspaceId: string;
+      normalizedName: string;
+    }
+  >();
+  for (const row of rows) {
+    const normalizedName = normalizeCategoryName(row.name);
+    if (!normalizedName) {
+      continue;
+    }
+
+    const normalizedKey = normalizeCategoryNameLower(normalizedName);
+    const key = `${row.workspaceId}:${normalizedKey}`;
+    if (groups.has(key)) {
+      continue;
+    }
+
+    groups.set(key, {
+      workspaceId: row.workspaceId,
+      normalizedName,
+    });
+  }
+
+  let processedGroups = 0;
+  let mergedCategories = 0;
+  let updatedResources = 0;
+
+  for (const group of groups.values()) {
+    const outcome = await mergeCategoriesInWorkspaceByNormalizedName(
+      group.workspaceId,
+      group.normalizedName,
+    );
+    if (!outcome) {
+      continue;
+    }
+
+    processedGroups += 1;
+    mergedCategories += outcome.mergedCategoryIds.length;
+    updatedResources += outcome.updatedResources;
+  }
+
+  return {
+    processedGroups,
+    mergedCategories,
+    updatedResources,
   };
 }
 
@@ -1842,7 +2099,8 @@ export async function backfillResourceOwnershipToFirstAdmin(
     FROM resource_categories AS cat
     WHERE
       rc.workspace_id = cat.workspace_id
-      AND lower(rc.category) = lower(cat.name)
+      AND lower(regexp_replace(btrim(rc.category), '[[:space:]]+', ' ', 'g')) =
+          lower(regexp_replace(btrim(cat.name), '[[:space:]]+', ' ', 'g'))
       AND rc.owner_user_id IS DISTINCT FROM COALESCE(cat.owner_user_id, ${normalizedFirstAdminUserId}::uuid)
   `);
 

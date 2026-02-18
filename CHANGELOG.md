@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Ask Library multi-turn conversation support in the dialog, with follow-up questions using recent thread context
+- Ask Library explanation metadata (`Why this answer`) including matched keywords, primary categories, and confidence level
+
+### Changed
+
+- Ask Library API now accepts bounded conversation history and uses it to improve retrieval relevance for follow-up prompts
+- Citation rendering now includes per-source match confidence percentages
+
+## [0.1.11] - 2026-02-18
+
+### Added
+
+- Automatic category deduplication/merge workflow for normalized name collisions (case-insensitive + trimmed + collapsed whitespace), applied in both database and mock modes
+- Database bootstrap pass that retroactively consolidates existing duplicate category groups across current data
+
+### Changed
+
+- Category create and rename flows now merge into a canonical category instead of returning duplicate-name conflicts
+- Resource-category reassignment paths now use normalized category matching so legacy spacing/casing variants are merged safely
+- Conflict resolution strategy is now deterministic:
+  canonical category is the oldest row; symbol prefers explicit rename input then canonical symbol then first available duplicate symbol; owner prefers canonical owner then first available duplicate owner
+
+### Fixed
+
+- Prevented silent category fragmentation caused by legacy whitespace/casing variants that previously bypassed duplicate checks
+
 ## [0.1.10] - 2026-02-18
 
 ### Added

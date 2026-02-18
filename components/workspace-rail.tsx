@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 
+import pkg from "@/package.json";
+
 import type { ResourceWorkspace } from "@/lib/resources";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -157,7 +159,7 @@ export function WorkspaceRail({
       </ScrollArea>
 
       {showSettingsButton && isVertical ? (
-        <div className="mt-auto border-t border-border/70 p-2">
+        <div className="mt-auto flex flex-col items-center border-t border-border/70 pb-2 pt-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -173,6 +175,9 @@ export function WorkspaceRail({
             </TooltipTrigger>
             <TooltipContent side="right">General settings</TooltipContent>
           </Tooltip>
+          <span className="mt-1 select-none text-[9px] leading-none tracking-wide text-muted-foreground/50">
+            v{pkg.version}
+          </span>
         </div>
       ) : null}
     </div>

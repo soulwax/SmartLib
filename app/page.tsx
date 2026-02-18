@@ -161,12 +161,37 @@ interface AskLibraryCitation {
   linkLabel: string;
   linkNote: string | null;
   score: number;
+  confidence?: number;
+}
+
+type AskLibraryTurnRole = "user" | "assistant";
+
+interface AskLibraryConversationTurnPayload {
+  role: AskLibraryTurnRole;
+  content: string;
+}
+
+interface AskLibraryReasoning {
+  summary: string;
+  queryTokens: string[];
+  primaryCategories: string[];
+  averageConfidence: number;
+  confidenceLabel: "low" | "medium" | "high";
+}
+
+interface AskLibraryConversationTurn extends AskLibraryConversationTurnPayload {
+  id: string;
+  usedAi?: boolean;
+  model?: string | null;
+  citations?: AskLibraryCitation[];
+  reasoning?: AskLibraryReasoning | null;
 }
 
 interface AskLibraryResponse extends ApiErrorResponse {
   question?: string;
   answer?: string;
   citations?: AskLibraryCitation[];
+  reasoning?: AskLibraryReasoning;
   usedAi?: boolean;
   model?: string | null;
 }
@@ -223,6 +248,7 @@ const SIDEBAR_KEYBOARD_STEP = SIDEBAR_SNAP_GRID;
 const FALLBACK_VIEWPORT_WIDTH = 1440;
 const SECTION_PREFERENCES_STORAGE_KEY = "section-preferences";
 const GENERAL_SETTINGS_STORAGE_KEY = "general-settings-preferences";
+const ASK_LIBRARY_HISTORY_LIMIT = 8;
 const DEFAULT_SECTION_PREFERENCES: SectionPreferences = {
   compactTitles: false,
   showContextLine: true,
@@ -236,6 +262,10 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettingsPreferences = {
   showMockModeBadge: true,
   aiFeaturesEnabled: false,
 };
+
+function createAskLibraryTurnId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 function snapSidebarWidth(width: number): number {
   return Math.round(width / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID;
@@ -354,6 +384,11 @@ export default function Page() {
   const [askLibraryAnswer, setAskLibraryAnswer] = useState<string | null>(null);
   const [askLibraryCitations, setAskLibraryCitations] = useState<
     AskLibraryCitation[]
+  >([]);
+  const [askLibraryReasoning, setAskLibraryReasoning] =
+    useState<AskLibraryReasoning | null>(null);
+  const [askLibraryConversation, setAskLibraryConversation] = useState<
+    AskLibraryConversationTurn[]
   >([]);
   const [askLibraryUsedAi, setAskLibraryUsedAi] = useState(false);
   const [askLibraryModel, setAskLibraryModel] = useState<string | null>(null);
@@ -2591,6 +2626,16 @@ export default function Page() {
     setAskLibraryOpen(true);
   }, [askLibraryQuery, searchQuery]);
 
+  const handleAskLibraryReset = useCallback(() => {
+    setAskLibraryConversation([]);
+    setAskLibraryAnswer(null);
+    setAskLibraryCitations([]);
+    setAskLibraryReasoning(null);
+    setAskLibraryUsedAi(false);
+    setAskLibraryModel(null);
+    setAskLibraryQuery(searchQuery.trim());
+  }, [searchQuery]);
+
   const handleAskLibrarySubmit = useCallback(async () => {
     const question = askLibraryQuery.trim();
     if (question.length < 2) {
@@ -2599,6 +2644,13 @@ export default function Page() {
       });
       return;
     }
+
+    const historyPayload = askLibraryConversation
+      .slice(-ASK_LIBRARY_HISTORY_LIMIT)
+      .map<AskLibraryConversationTurnPayload>((turn) => ({
+        role: turn.role,
+        content: turn.content,
+      }));
 
     setIsAskingLibrary(true);
     try {
@@ -2613,6 +2665,7 @@ export default function Page() {
           category: activeCategory === "All" ? null : activeCategory,
           useAi: canUseAiFeatures,
           maxCitations: 5,
+          history: historyPayload,
         }),
       });
       const payload = await readJson<AskLibraryResponse>(response);
@@ -2622,8 +2675,31 @@ export default function Page() {
 
       setAskLibraryAnswer(payload.answer);
       setAskLibraryCitations(payload.citations ?? []);
+      setAskLibraryReasoning(payload.reasoning ?? null);
       setAskLibraryUsedAi(payload.usedAi === true);
       setAskLibraryModel(payload.model ?? null);
+      setAskLibraryConversation((previous) => {
+        const next: AskLibraryConversationTurn[] = [
+          ...previous,
+          {
+            id: createAskLibraryTurnId(),
+            role: "user",
+            content: question,
+          },
+          {
+            id: createAskLibraryTurnId(),
+            role: "assistant",
+            content: payload.answer ?? "",
+            usedAi: payload.usedAi === true,
+            model: payload.model ?? null,
+            citations: payload.citations ?? [],
+            reasoning: payload.reasoning ?? null,
+          },
+        ];
+
+        return next.slice(-(ASK_LIBRARY_HISTORY_LIMIT * 2));
+      });
+      setAskLibraryQuery("");
     } catch (error) {
       toast.error("Ask Library failed", {
         description:
@@ -2637,6 +2713,7 @@ export default function Page() {
   }, [
     activeCategory,
     activeWorkspaceId,
+    askLibraryConversation,
     askLibraryQuery,
     canUseAiFeatures,
   ]);
@@ -2993,7 +3070,7 @@ export default function Page() {
 
       <div className="flex flex-1 overflow-hidden">
         <aside
-          className="hidden w-16 shrink-0 border-r border-border bg-card md:block"
+          className="hidden w-14 shrink-0 border-r border-border bg-card md:block"
           aria-label="Workspace navigation"
         >
           <WorkspaceRail
@@ -3464,8 +3541,8 @@ export default function Page() {
           <DialogHeader>
             <DialogTitle>Ask Your Library</DialogTitle>
             <DialogDescription>
-              Ask a question about saved resources in this workspace and get an
-              answer with citations.
+              Ask about saved resources, then continue with follow-up questions
+              in the same thread.
             </DialogDescription>
           </DialogHeader>
 
@@ -3485,27 +3562,81 @@ export default function Page() {
                   ? "AI-assisted answering is enabled."
                   : "AI-assisted answering is off. You will get a deterministic cited summary."}
               </p>
+              <p className="text-xs text-muted-foreground">
+                Follow-up prompts use the latest conversation context.
+              </p>
             </div>
 
-            <div className="flex justify-end gap-2">
+            <div className="flex items-center justify-between gap-2">
               <Button
                 type="button"
-                variant="outline"
-                onClick={() => setAskLibraryOpen(false)}
-                disabled={isAskingLibrary}
+                variant="ghost"
+                onClick={handleAskLibraryReset}
+                disabled={isAskingLibrary || askLibraryConversation.length === 0}
               >
-                Close
+                New thread
               </Button>
-              <Button
-                type="button"
-                onClick={() => {
-                  void handleAskLibrarySubmit();
-                }}
-                disabled={isAskingLibrary || askLibraryQuery.trim().length < 2}
-              >
-                {isAskingLibrary ? "Thinking..." : "Ask"}
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setAskLibraryOpen(false)}
+                  disabled={isAskingLibrary}
+                >
+                  Close
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    void handleAskLibrarySubmit();
+                  }}
+                  disabled={isAskingLibrary || askLibraryQuery.trim().length < 2}
+                >
+                  {isAskingLibrary
+                    ? "Thinking..."
+                    : askLibraryConversation.length > 0
+                      ? "Send follow-up"
+                      : "Ask"}
+                </Button>
+              </div>
             </div>
+
+            {askLibraryConversation.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Conversation
+                </p>
+                <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border border-border/70 bg-card/60 p-3">
+                  {askLibraryConversation.map((turn) => (
+                    <div
+                      key={turn.id}
+                      className={cn(
+                        "rounded-md border p-2",
+                        turn.role === "assistant"
+                          ? "border-border/70 bg-background/80"
+                          : "border-primary/25 bg-primary/10",
+                      )}
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          {turn.role === "assistant" ? "Library" : "You"}
+                        </p>
+                        {turn.role === "assistant" ? (
+                          <span className="text-[11px] text-muted-foreground">
+                            {turn.usedAi
+                              ? `AI${turn.model ? ` (${turn.model})` : ""}`
+                              : "Rule-based"}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="whitespace-pre-wrap text-sm text-foreground">
+                        {turn.content}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {askLibraryAnswer ? (
               <div className="space-y-3 rounded-md border border-border/70 bg-card/60 p-4">
@@ -3521,6 +3652,36 @@ export default function Page() {
                   {askLibraryAnswer}
                 </p>
 
+                {askLibraryReasoning ? (
+                  <div className="space-y-2 rounded-md border border-border/70 bg-background/60 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Why this answer
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {askLibraryReasoning.summary}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="rounded-full border border-border/80 bg-card px-2 py-0.5 text-[11px] font-medium text-foreground">
+                        {askLibraryReasoning.averageConfidence}%{" "}
+                        {askLibraryReasoning.confidenceLabel} confidence
+                      </span>
+                      {askLibraryReasoning.primaryCategories.map((category) => (
+                        <span
+                          key={`ask-reasoning-category-${category}`}
+                          className="rounded-full border border-border/70 bg-card px-2 py-0.5 text-[11px] text-muted-foreground"
+                        >
+                          {category}
+                        </span>
+                      ))}
+                    </div>
+                    {askLibraryReasoning.queryTokens.length > 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        Keywords: {askLibraryReasoning.queryTokens.join(", ")}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 {askLibraryCitations.length > 0 ? (
                   <div className="space-y-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -3532,14 +3693,19 @@ export default function Page() {
                           key={`${citation.resourceId}-${citation.index}`}
                           className="rounded-md border border-border/70 bg-background/70 p-2"
                         >
-                          <a
-                            href={citation.linkUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm font-medium text-primary hover:underline"
-                          >
-                            [{citation.index}] {citation.linkLabel}
-                          </a>
+                          <div className="flex items-start justify-between gap-2">
+                            <a
+                              href={citation.linkUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm font-medium text-primary hover:underline"
+                            >
+                              [{citation.index}] {citation.linkLabel}
+                            </a>
+                            <span className="rounded-full border border-border/70 bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+                              {citation.confidence ?? 0}% match
+                            </span>
+                          </div>
                           <p className="mt-0.5 text-xs text-muted-foreground">
                             {citation.category}
                             {citation.tags.length > 0

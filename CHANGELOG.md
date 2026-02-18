@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-18
+
 ### Added
 
 - Ask Library multi-turn conversation support in the dialog, with follow-up questions using recent thread context
@@ -13,12 +15,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Ask Library thread persistence (database-backed) per user/workspace, including new thread listing/detail APIs
 - Ask Library follow-up suggestion generation and one-click follow-up actions in the answer panel
 - New migration `0012_noble_molecule` creating `ask_library_threads`
+- Draggable category board layout with reusable modular resource cards that can move within and across categories
+- New item move API endpoint (`POST /api/items/move`) for explicit move operations (`itemId`, source/target category IDs, and target order)
+- Item placement model fields (`categoryId`, `order`) with sparse ordering support for efficient drag-and-drop updates
 
 ### Changed
 
 - Ask Library API now accepts bounded conversation history and uses it to improve retrieval relevance for follow-up prompts
 - Citation rendering now includes per-source match confidence percentages
 - Ask Library request scoping now supports explicit workspace/category/tags toggles for faster refinements
+- Resource browsing now renders as category columns and performs optimistic drag-and-drop updates with rollback/error toast on failed move sync
+- Move processing now enforces atomic category ownership/order updates and reindexes only affected target-category items when order collisions occur
+- Database and mock stores now keep category-to-item linkage consistent via category IDs during create/update/delete/move flows
 
 ## [0.1.11] - 2026-02-18
 

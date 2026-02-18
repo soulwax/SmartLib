@@ -2,11 +2,14 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
-import { ResourceCategoryNotFoundError } from "@/lib/resource-repository"
+import {
+  ResourceCategoryAlreadyExistsError,
+  ResourceCategoryNotFoundError,
+} from "@/lib/resource-repository"
 import {
   deleteResourceCategoryService,
   listResourceCategoriesService,
-  updateResourceCategorySymbolService,
+  updateResourceCategoryService,
 } from "@/lib/resource-service"
 
 export const runtime = "nodejs"
@@ -24,9 +27,14 @@ async function parseCategoryId(context: RouteContext) {
   return z.string().uuid().parse(params.id)
 }
 
-const updateCategorySchema = z.object({
-  symbol: z.string().trim().max(16).nullable().optional(),
-})
+const updateCategorySchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    symbol: z.string().trim().max(16).nullable().optional(),
+  })
+  .refine((input) => input.name !== undefined || input.symbol !== undefined, {
+    message: "At least one editable field is required.",
+  })
 
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
@@ -105,9 +113,12 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     const payload = await readRequestJson(request)
     const input = updateCategorySchema.parse(payload)
-    const { mode, category } = await updateResourceCategorySymbolService(
+    const { mode, category } = await updateResourceCategoryService(
       categoryId,
-      input.symbol ?? null,
+      {
+        name: input.name,
+        symbol: input.symbol,
+      },
       {
         actorUserId: session.user.id,
         includeAllWorkspaces: session.user.isFirstAdmin === true,
@@ -128,6 +139,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     if (error instanceof ResourceCategoryNotFoundError) {
       return errorResponse(error.message, 404)
+    }
+
+    if (error instanceof ResourceCategoryAlreadyExistsError) {
+      return errorResponse(error.message, 409)
     }
 
     return errorResponse("Unexpected server error.", 500)

@@ -559,9 +559,9 @@ export async function createMockResourceCategory(
   return cloneCategory(created)
 }
 
-export async function updateMockResourceCategorySymbol(
+export async function updateMockResourceCategory(
   categoryId: string,
-  symbol: string | null,
+  input: { name?: string; symbol?: string | null },
   options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
 ): Promise<ResourceCategory> {
   ensureMockStore()
@@ -583,15 +583,75 @@ export async function updateMockResourceCategorySymbol(
     throw new ResourceCategoryNotFoundError(categoryId)
   }
 
+  const normalizedExistingName = normalizeCategoryName(category.name)
+  const normalizedName =
+    typeof input.name === "string"
+      ? normalizeCategoryName(input.name)
+      : normalizedExistingName
+  const normalizedSymbol =
+    input.symbol === undefined
+      ? normalizeCategorySymbol(category.symbol)
+      : normalizeCategorySymbol(input.symbol)
+
+  if (!normalizedName) {
+    throw new Error("Category name is required.")
+  }
+
+  const duplicate = (mockCategories ?? []).find(
+    (item) =>
+      item.id !== categoryId &&
+      item.workspaceId === category.workspaceId &&
+      item.name.toLowerCase() === normalizedName.toLowerCase()
+  )
+  if (duplicate) {
+    throw new ResourceCategoryAlreadyExistsError(normalizedName)
+  }
+
+  const didNameChange = normalizedName !== normalizedExistingName
+
   const next = [...(mockCategories ?? [])]
   next[index] = {
     ...next[index],
-    symbol: normalizeCategorySymbol(symbol),
+    name: normalizedName,
+    symbol: normalizedSymbol,
     updatedAt: new Date().toISOString(),
   }
   mockCategories = next
 
+  if (didNameChange) {
+    mockStore = (mockStore ?? []).map((resource) => {
+      if (resource.workspaceId !== category.workspaceId) {
+        return resource
+      }
+
+      if (resource.category.toLowerCase() !== normalizedExistingName.toLowerCase()) {
+        return resource
+      }
+
+      return {
+        ...resource,
+        category: normalizedName,
+        ownerUserId: next[index].ownerUserId ?? null,
+      }
+    })
+  }
+
   return cloneCategory(next[index])
+}
+
+export async function updateMockResourceCategorySymbol(
+  categoryId: string,
+  symbol: string | null,
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+): Promise<ResourceCategory> {
+  return updateMockResourceCategory(
+    categoryId,
+    { symbol },
+    {
+      actorUserId: options?.actorUserId,
+      includeAllWorkspaces: options?.includeAllWorkspaces,
+    }
+  )
 }
 
 export async function deleteMockResourceCategory(

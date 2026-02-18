@@ -73,6 +73,7 @@ import {
   ShieldPlus,
   Trash2,
   UserPlus,
+  WandSparkles,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 
@@ -118,6 +119,12 @@ interface CategoryResponse extends ApiErrorResponse {
   category?: ResourceCategory;
 }
 
+interface CategoryNameSuggestionResponse extends ApiErrorResponse {
+  suggestedName?: string;
+  analyzedLinks?: number;
+  model?: string;
+}
+
 interface WorkspaceResponse extends ApiErrorResponse {
   mode?: "database" | "mock";
   workspace?: ResourceWorkspace;
@@ -158,6 +165,7 @@ interface GeneralSettingsPreferences {
   showAccountEmail: boolean;
   showAccountRole: boolean;
   showMockModeBadge: boolean;
+  aiFeaturesEnabled: boolean;
 }
 
 async function readJson<T>(response: Response): Promise<T | null> {
@@ -189,6 +197,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettingsPreferences = {
   showAccountEmail: true,
   showAccountRole: true,
   showMockModeBadge: true,
+  aiFeaturesEnabled: false,
 };
 
 function snapSidebarWidth(width: number): number {
@@ -280,6 +289,10 @@ function parseGeneralSettingsPreferences(
         typeof parsed.showMockModeBadge === "boolean"
           ? parsed.showMockModeBadge
           : DEFAULT_GENERAL_SETTINGS.showMockModeBadge,
+      aiFeaturesEnabled:
+        typeof parsed.aiFeaturesEnabled === "boolean"
+          ? parsed.aiFeaturesEnabled
+          : DEFAULT_GENERAL_SETTINGS.aiFeaturesEnabled,
     };
   } catch {
     return null;
@@ -330,7 +343,10 @@ export default function Page() {
   const [editCategoryDialogOpen, setEditCategoryDialogOpen] = useState(false);
   const [editingCategoryRecord, setEditingCategoryRecord] =
     useState<ResourceCategory | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState("");
   const [editingCategorySymbol, setEditingCategorySymbol] = useState("");
+  const [isSuggestingCategoryName, setIsSuggestingCategoryName] =
+    useState(false);
   const [createWorkspaceDialogOpen, setCreateWorkspaceDialogOpen] =
     useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
@@ -400,8 +416,11 @@ export default function Page() {
   const canSubmitCategoryCustomization =
     Boolean(editingCategoryRecord) &&
     !isCategoryMutating &&
-    editingCategorySymbol.trim() !==
-      (editingCategoryRecord?.symbol?.trim() ?? "");
+    editingCategoryName.trim().length > 0 &&
+    (editingCategoryName.trim() !== (editingCategoryRecord?.name ?? "") ||
+      editingCategorySymbol.trim() !==
+        (editingCategoryRecord?.symbol?.trim() ?? ""));
+  const canUseAiFeatures = isAuthenticated && generalSettings.aiFeaturesEnabled;
   const desktopSidebarMaxWidth = getDesktopSidebarMaxWidth(getViewportWidth());
   const updateSectionPreference = useCallback(
     (key: keyof SectionPreferences, checked: boolean) => {
@@ -1355,6 +1374,7 @@ export default function Page() {
       }
 
       setEditingCategoryRecord(categoryRecord);
+      setEditingCategoryName(categoryRecord.name);
       setEditingCategorySymbol(categoryRecord.symbol ?? "");
       setEditCategoryDialogOpen(true);
     },
@@ -1373,6 +1393,17 @@ export default function Page() {
       return;
     }
 
+    const nextName = editingCategoryName.trim();
+    if (!nextName) {
+      toast.error("Category name required", {
+        description: "Enter a category name before saving.",
+      });
+      return;
+    }
+
+    const previousName = editingCategoryRecord.name;
+    const previousNameLower = previousName.toLowerCase();
+
     setIsCategoryMutating(true);
     try {
       const response = await fetch(`/api/categories/${editingCategoryRecord.id}`, {
@@ -1381,6 +1412,7 @@ export default function Page() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          name: nextName,
           symbol: editingCategorySymbol.trim() || null,
         }),
       });
@@ -1401,11 +1433,36 @@ export default function Page() {
           category.id === updatedCategory.id ? updatedCategory : category,
         ),
       );
+
+      if (updatedCategory.name !== previousName) {
+        setResources((previous) =>
+          previous.map((resource) =>
+            resource.workspaceId === updatedCategory.workspaceId &&
+            resource.category.toLowerCase() === previousNameLower
+              ? {
+                  ...resource,
+                  category: updatedCategory.name,
+                  ownerUserId: updatedCategory.ownerUserId ?? null,
+                }
+              : resource,
+          ),
+        );
+      }
+
+      setActiveCategory((previous) =>
+        previous.toLowerCase() === previousNameLower
+          ? updatedCategory.name
+          : previous,
+      );
       setEditingCategoryRecord(updatedCategory);
+      setEditingCategoryName(updatedCategory.name);
       setEditingCategorySymbol(updatedCategory.symbol ?? "");
       setEditCategoryDialogOpen(false);
       toast.success("Category updated", {
-        description: `${updatedCategory.name} now uses ${updatedCategory.symbol || "no symbol"}.`,
+        description:
+          updatedCategory.name === previousName
+            ? `${updatedCategory.name} now uses ${updatedCategory.symbol || "no symbol"}.`
+            : `${previousName} renamed to ${updatedCategory.name}.`,
       });
     } catch (error) {
       toast.error("Category update failed", {
@@ -1417,7 +1474,66 @@ export default function Page() {
     } finally {
       setIsCategoryMutating(false);
     }
-  }, [canEditCategoryByName, editingCategoryRecord, editingCategorySymbol]);
+  }, [
+    canEditCategoryByName,
+    editingCategoryName,
+    editingCategoryRecord,
+    editingCategorySymbol,
+  ]);
+
+  const handleSuggestCategoryNameWithAi = useCallback(async () => {
+    if (!editingCategoryRecord) {
+      return;
+    }
+
+    if (!canUseAiFeatures) {
+      toast.error("AI features disabled", {
+        description: "Enable AI features in Preferences to use this action.",
+      });
+      return;
+    }
+
+    setIsSuggestingCategoryName(true);
+    try {
+      const response = await fetch(
+        `/api/categories/${editingCategoryRecord.id}/suggest-name`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+      const payload = await readJson<CategoryNameSuggestionResponse>(response);
+      if (!response.ok || !payload?.suggestedName) {
+        throw new Error(
+          payload?.error ?? "Failed to generate an AI category name suggestion.",
+        );
+      }
+
+      const suggestedName = payload.suggestedName.trim();
+      if (!suggestedName) {
+        throw new Error("AI suggestion returned an empty name.");
+      }
+
+      setEditingCategoryName(suggestedName);
+      toast.success("AI suggestion ready", {
+        description:
+          payload.analyzedLinks && payload.analyzedLinks > 0
+            ? `Suggested name: ${suggestedName} (analyzed ${payload.analyzedLinks} links).`
+            : `Suggested name: ${suggestedName}.`,
+      });
+    } catch (error) {
+      toast.error("AI suggestion failed", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not suggest a category name.",
+      });
+    } finally {
+      setIsSuggestingCategoryName(false);
+    }
+  }, [canUseAiFeatures, editingCategoryRecord]);
 
   const handleDeleteCategoryByName = useCallback(
     async (categoryName: string) => {
@@ -2845,6 +2961,28 @@ export default function Page() {
                   />
                 </div>
                 <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium text-foreground">
+                      Enable AI features
+                    </p>
+                    {!isAuthenticated ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        Sign in to enable AI-assisted actions.
+                      </p>
+                    ) : null}
+                  </div>
+                  <Switch
+                    checked={
+                      isAuthenticated ? generalSettings.aiFeaturesEnabled : false
+                    }
+                    onCheckedChange={(checked) =>
+                      updateGeneralSetting("aiFeaturesEnabled", checked)
+                    }
+                    disabled={!isAuthenticated}
+                    aria-label="Enable AI features"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
                   <p className="text-xs font-medium text-foreground">Compact titles</p>
                   <Switch
                     checked={sectionPreferences.compactTitles}
@@ -3102,7 +3240,9 @@ export default function Page() {
           setEditCategoryDialogOpen(open);
           if (!open) {
             setEditingCategoryRecord(null);
+            setEditingCategoryName("");
             setEditingCategorySymbol("");
+            setIsSuggestingCategoryName(false);
           }
         }}
       >
@@ -3114,13 +3254,40 @@ export default function Page() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="edit-category-name">Name</Label>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="edit-category-name">Name</Label>
+              {canUseAiFeatures ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleSuggestCategoryNameWithAi()}
+                  disabled={
+                    isSuggestingCategoryName ||
+                    isCategoryMutating ||
+                    !editingCategoryRecord
+                  }
+                >
+                  <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                  {isSuggestingCategoryName ? "Analyzing..." : "Suggest with AI"}
+                </Button>
+              ) : null}
+            </div>
             <Input
               id="edit-category-name"
-              value={editingCategoryRecord?.name ?? ""}
-              disabled
+              value={editingCategoryName}
+              onChange={(event) => setEditingCategoryName(event.target.value)}
+              placeholder="e.g. Dev Tooling"
+              maxLength={80}
+              disabled={isCategoryMutating || !editingCategoryRecord}
             />
+            {isAuthenticated && !generalSettings.aiFeaturesEnabled ? (
+              <p className="text-[11px] text-muted-foreground">
+                Enable AI features in Preferences to suggest a short category
+                name from links.
+              </p>
+            ) : null}
           </div>
 
           <div className="flex flex-col gap-2">
@@ -3138,7 +3305,7 @@ export default function Page() {
           <Button
             type="button"
             onClick={() => void handleSaveCategoryCustomization()}
-            disabled={!canSubmitCategoryCustomization}
+            disabled={!canSubmitCategoryCustomization || isSuggestingCategoryName}
           >
             {isCategoryMutating ? "Saving..." : "Save Category"}
           </Button>

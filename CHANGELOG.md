@@ -34,6 +34,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Import path for route type definitions in `next-env.d.ts`
 - `onlyBuiltDependencies` configuration added for `sharp` in `package.json`
 
+## [0.1.5] - 2026-02-18
+
+### Added
+
+- AI-assisted category rename suggestion endpoint that analyzes links in a category and proposes a short fitting name
+- `Enable AI features` user preference toggle (off by default; disabled for guest sessions)
+- Category settings modal action `Suggest with AI` when user is logged in and AI features are enabled
+
+### Changed
+
+- Category settings now support editing category name and symbol together
+- Category update API expanded to accept both `name` and `symbol` updates in a single request
+- Category rename flow now propagates renamed category names to matching resource cards in both database and mock modes
+
+### Fixed
+
+- Category rename/save flow now keeps active category and in-memory resources consistent immediately after rename
+- Category update API now returns conflict (`409`) for duplicate category names in workspace scope
+
 ## [0.1.4] - 2026-02-18
 
 ### Added

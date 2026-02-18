@@ -1227,42 +1227,100 @@ export async function createResourceCategory(
   }
 }
 
+export async function updateResourceCategory(
+  categoryId: string,
+  input: { name?: string; symbol?: string | null },
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean },
+): Promise<ResourceCategory> {
+  await ensureSchema();
+  const db = getDb();
+
+  const existing = await ensureCategoryVisibleToActor(
+    categoryId,
+    options?.actorUserId,
+    { includeAllWorkspaces: options?.includeAllWorkspaces },
+  );
+  const normalizedExistingName = normalizeCategoryName(existing.name);
+  const normalizedName =
+    typeof input.name === "string"
+      ? normalizeCategoryName(input.name)
+      : normalizedExistingName;
+  const normalizedSymbol =
+    input.symbol === undefined
+      ? normalizeCategorySymbol(existing.symbol)
+      : normalizeCategorySymbol(input.symbol);
+
+  if (!normalizedName) {
+    throw new Error("Category name is required.");
+  }
+
+  const didNameChange = normalizedName !== normalizedExistingName;
+
+  let updated: ResourceCategoryRow | undefined;
+  try {
+    const rows = await db
+      .update(resourceCategories)
+      .set({
+        name: normalizedName,
+        symbol: normalizedSymbol,
+        updatedAt: sql`NOW()`,
+      })
+      .where(eq(resourceCategories.id, categoryId))
+      .returning({
+        id: resourceCategories.id,
+        workspaceId: resourceCategories.workspaceId,
+        name: resourceCategories.name,
+        symbol: resourceCategories.symbol,
+        ownerUserId: resourceCategories.ownerUserId,
+        createdAt: resourceCategories.createdAt,
+        updatedAt: resourceCategories.updatedAt,
+      });
+
+    updated = rows[0] as ResourceCategoryRow | undefined;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new ResourceCategoryAlreadyExistsError(normalizedName);
+    }
+
+    throw error;
+  }
+
+  if (!updated) {
+    throw new ResourceCategoryNotFoundError(categoryId);
+  }
+
+  if (didNameChange) {
+    await db
+      .update(resourceCards)
+      .set({
+        category: updated.name,
+        ownerUserId: updated.ownerUserId ?? null,
+        updatedAt: sql`NOW()`,
+      })
+      .where(
+        and(
+          eq(resourceCards.workspaceId, updated.workspaceId),
+          sql`lower(${resourceCards.category}) = ${normalizedExistingName.toLowerCase()}`,
+        ),
+      );
+  }
+
+  return normalizeCategoryRow(updated);
+}
+
 export async function updateResourceCategorySymbol(
   categoryId: string,
   symbol: string | null,
   options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean },
 ): Promise<ResourceCategory> {
-  await ensureSchema();
-  const db = getDb();
-  const normalizedSymbol = normalizeCategorySymbol(symbol);
-
-  await ensureCategoryVisibleToActor(categoryId, options?.actorUserId, {
-    includeAllWorkspaces: options?.includeAllWorkspaces,
-  });
-
-  const rows = await db
-    .update(resourceCategories)
-    .set({
-      symbol: normalizedSymbol,
-      updatedAt: sql`NOW()`,
-    })
-    .where(eq(resourceCategories.id, categoryId))
-    .returning({
-      id: resourceCategories.id,
-      workspaceId: resourceCategories.workspaceId,
-      name: resourceCategories.name,
-      symbol: resourceCategories.symbol,
-      ownerUserId: resourceCategories.ownerUserId,
-      createdAt: resourceCategories.createdAt,
-      updatedAt: resourceCategories.updatedAt,
-    });
-
-  const updated = rows[0];
-  if (!updated) {
-    throw new ResourceCategoryNotFoundError(categoryId);
-  }
-
-  return normalizeCategoryRow(updated as ResourceCategoryRow);
+  return updateResourceCategory(
+    categoryId,
+    { symbol },
+    {
+      actorUserId: options?.actorUserId,
+      includeAllWorkspaces: options?.includeAllWorkspaces,
+    },
+  );
 }
 
 export async function deleteResourceCategory(

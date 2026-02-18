@@ -17,7 +17,7 @@ import {
   listMockResourceWorkspaces,
   listMockResources,
   renameMockResourceWorkspace,
-  updateMockResourceCategorySymbol,
+  updateMockResourceCategory,
   restoreMockResource,
   updateMockResource,
 } from "@/lib/mock-resource-store"
@@ -36,7 +36,7 @@ import {
   listResourceWorkspaces as listDbResourceWorkspaces,
   listResources as listDbResources,
   renameResourceWorkspace as renameDbResourceWorkspace,
-  updateResourceCategorySymbol as updateDbResourceCategorySymbol,
+  updateResourceCategory as updateDbResourceCategory,
   restoreResource as restoreDbResource,
   updateResource as updateDbResource,
 } from "@/lib/resource-repository"
@@ -253,6 +253,21 @@ export async function updateResourceCategorySymbolService(
   symbol: string | null,
   options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
 ): Promise<{ mode: ResourceDataMode; category: ResourceCategory }> {
+  return updateResourceCategoryService(
+    id,
+    { symbol },
+    {
+      actorUserId: options?.actorUserId,
+      includeAllWorkspaces: options?.includeAllWorkspaces,
+    }
+  )
+}
+
+export async function updateResourceCategoryService(
+  id: string,
+  input: { name?: string; symbol?: string | null },
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+): Promise<{ mode: ResourceDataMode; category: ResourceCategory }> {
   const mode = currentMode()
 
   if (mode === "database") {
@@ -260,13 +275,13 @@ export async function updateResourceCategorySymbolService(
 
     return {
       mode,
-      category: await updateDbResourceCategorySymbol(id, symbol, options),
+      category: await updateDbResourceCategory(id, input, options),
     }
   }
 
   return {
     mode,
-    category: await updateMockResourceCategorySymbol(id, symbol, options),
+    category: await updateMockResourceCategory(id, input, options),
   }
 }
 

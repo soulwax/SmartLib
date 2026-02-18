@@ -381,14 +381,42 @@ async function listTagsForResourceIds(
   return tagsByResourceId;
 }
 
-async function attachTags(resources: ResourceCard[]): Promise<ResourceCard[]> {
-  const tagsByResourceId = await listTagsForResourceIds(
-    resources.map((r) => r.id),
-  );
+/**
+ * Attach tags and favicons to a list of resources in a single parallel pass.
+ * The two DB lookups (tags and favicon cache) are independent and fired
+ * concurrently so they add only one RTT instead of two.
+ */
+async function attachTagsAndFavicons(
+  resources: ResourceCard[],
+): Promise<ResourceCard[]> {
+  if (resources.length === 0) return resources;
+
+  const allHostnames = new Set<string>();
+  for (const resource of resources) {
+    for (const link of resource.links) {
+      const h = hostnameFromUrl(link.url);
+      if (h) allHostnames.add(h);
+    }
+  }
+
+  const [tagsByResourceId, faviconByHostname] = await Promise.all([
+    listTagsForResourceIds(resources.map((r) => r.id)),
+    allHostnames.size > 0
+      ? getFaviconUrlsByHostnames([...allHostnames])
+      : Promise.resolve(new Map<string, string | null>()),
+  ]);
 
   return resources.map((resource) => ({
     ...resource,
     tags: tagsByResourceId.get(resource.id) ?? [],
+    links: resource.links.map((link) => {
+      const hostname = hostnameFromUrl(link.url);
+      const faviconUrl = hostname
+        ? (faviconByHostname.get(hostname) ??
+          fallbackFaviconUrlForHostname(hostname))
+        : null;
+      return { ...link, faviconUrl };
+    }),
   }));
 }
 
@@ -410,35 +438,6 @@ async function seedFaviconCacheForUrls(urls: string[]): Promise<void> {
       await upsertFaviconCache(hostname, favicon);
     }),
   );
-}
-
-async function attachFavicons(
-  resources: ResourceCard[],
-): Promise<ResourceCard[]> {
-  // Collect all unique hostnames across every link in every resource
-  const allHostnames = new Set<string>();
-  for (const resource of resources) {
-    for (const link of resource.links) {
-      const h = hostnameFromUrl(link.url);
-      if (h) allHostnames.add(h);
-    }
-  }
-
-  if (allHostnames.size === 0) return resources;
-
-  const faviconByHostname = await getFaviconUrlsByHostnames([...allHostnames]);
-
-  return resources.map((resource) => ({
-    ...resource,
-    links: resource.links.map((link) => {
-      const hostname = hostnameFromUrl(link.url);
-      const faviconUrl = hostname
-        ? (faviconByHostname.get(hostname) ??
-          fallbackFaviconUrlForHostname(hostname))
-        : null;
-      return { ...link, faviconUrl };
-    }),
-  }));
 }
 
 async function findResourceById(
@@ -469,48 +468,57 @@ async function findResourceById(
     .where(whereCondition)
     .orderBy(asc(resourceLinks.position));
 
-  const resources = await attachFavicons(
-    await attachTags(mapRowsToResources(rows)),
-  );
+  const resources = await attachTagsAndFavicons(mapRowsToResources(rows));
   return resources[0] ?? null;
 }
 
+// Memoised so the INSERT + SELECT only runs once per process/lambda instance.
+// Concurrent callers share the same promise rather than racing to the DB.
+let mainWorkspacePromise: Promise<ResourceWorkspace> | null = null;
+
 async function ensureMainWorkspace(): Promise<ResourceWorkspace> {
-  const db = getDb();
+  if (mainWorkspacePromise) return mainWorkspacePromise;
 
-  await db.execute(sql`
-    INSERT INTO resource_workspaces (name, owner_user_id)
-    VALUES (${MAIN_RESOURCE_WORKSPACE_NAME}, NULL)
-    ON CONFLICT (
-      (coalesce(owner_user_id, ${WORKSPACE_OWNER_SENTINEL_UUID}::uuid)),
-      (lower(name))
-    ) DO NOTHING
-  `);
+  mainWorkspacePromise = (async () => {
+    const db = getDb();
 
-  const rows = await db
-    .select({
-      id: resourceWorkspaces.id,
-      name: resourceWorkspaces.name,
-      ownerUserId: resourceWorkspaces.ownerUserId,
-      createdAt: resourceWorkspaces.createdAt,
-      updatedAt: resourceWorkspaces.updatedAt,
-    })
-    .from(resourceWorkspaces)
-    .where(
-      and(
-        isNull(resourceWorkspaces.ownerUserId),
-        sql`lower(${resourceWorkspaces.name}) = ${MAIN_RESOURCE_WORKSPACE_NAME.toLowerCase()}`,
-      ),
-    )
-    .orderBy(asc(resourceWorkspaces.createdAt))
-    .limit(1);
+    await db.execute(sql`
+      INSERT INTO resource_workspaces (name, owner_user_id)
+      VALUES (${MAIN_RESOURCE_WORKSPACE_NAME}, NULL)
+      ON CONFLICT (
+        (coalesce(owner_user_id, ${WORKSPACE_OWNER_SENTINEL_UUID}::uuid)),
+        (lower(name))
+      ) DO NOTHING
+    `);
 
-  const workspace = rows[0];
-  if (!workspace) {
-    throw new Error("Failed to initialize main workspace.");
-  }
+    const rows = await db
+      .select({
+        id: resourceWorkspaces.id,
+        name: resourceWorkspaces.name,
+        ownerUserId: resourceWorkspaces.ownerUserId,
+        createdAt: resourceWorkspaces.createdAt,
+        updatedAt: resourceWorkspaces.updatedAt,
+      })
+      .from(resourceWorkspaces)
+      .where(
+        and(
+          isNull(resourceWorkspaces.ownerUserId),
+          sql`lower(${resourceWorkspaces.name}) = ${MAIN_RESOURCE_WORKSPACE_NAME.toLowerCase()}`,
+        ),
+      )
+      .orderBy(asc(resourceWorkspaces.createdAt))
+      .limit(1);
 
-  return normalizeWorkspaceRow(workspace as ResourceWorkspaceRow);
+    const workspace = rows[0];
+    if (!workspace) {
+      mainWorkspacePromise = null; // allow retry on failure
+      throw new Error("Failed to initialize main workspace.");
+    }
+
+    return normalizeWorkspaceRow(workspace as ResourceWorkspaceRow);
+  })();
+
+  return mainWorkspacePromise;
 }
 
 async function findWorkspaceById(
@@ -634,32 +642,6 @@ async function resolveWorkspaceForInput(
   }
 
   return ensureMainWorkspace();
-}
-
-async function syncCategoriesFromResources() {
-  const db = getDb();
-
-  await db.execute(sql`
-    INSERT INTO resource_categories (name, workspace_id, owner_user_id)
-    SELECT
-      source.normalized_name,
-      source.workspace_id,
-      source.owner_user_id
-    FROM (
-      SELECT DISTINCT ON (cards.workspace_id, lower(trim(cards.category)))
-        trim(cards.category) AS normalized_name,
-        cards.workspace_id,
-        cards.owner_user_id
-      FROM resource_cards AS cards
-      WHERE trim(cards.category) <> ''
-      ORDER BY
-        cards.workspace_id,
-        lower(trim(cards.category)),
-        cards.updated_at DESC,
-        cards.created_at DESC
-    ) AS source
-    ON CONFLICT (workspace_id, lower(name)) DO NOTHING
-  `);
 }
 
 async function findCategoryByNameInWorkspace(
@@ -1148,9 +1130,6 @@ export async function listResourceCategories(options?: {
   const normalizedUserId = normalizeActorUserId(options?.userId);
   const normalizedWorkspaceId = options?.workspaceId?.trim() || null;
 
-  await ensureMainWorkspace();
-  await syncCategoriesFromResources();
-
   const visibleWorkspaceIds = await listVisibleWorkspaceIds(normalizedUserId, {
     includeAllWorkspaces: options?.includeAllWorkspaces,
   });
@@ -1391,7 +1370,7 @@ export async function listResources(options?: {
     .where(and(isNull(resourceCards.deletedAt), workspaceScopeCondition))
     .orderBy(desc(resourceCards.createdAt), asc(resourceLinks.position));
 
-  return attachFavicons(await attachTags(mapRowsToResources(rows)));
+  return attachTagsAndFavicons(mapRowsToResources(rows));
 }
 
 export async function listResourcesIncludingDeleted(): Promise<ResourceCard[]> {
@@ -1415,7 +1394,7 @@ export async function listResourcesIncludingDeleted(): Promise<ResourceCard[]> {
     .leftJoin(resourceLinks, eq(resourceCards.id, resourceLinks.resourceId))
     .orderBy(desc(resourceCards.createdAt), asc(resourceLinks.position));
 
-  return attachFavicons(await attachTags(mapRowsToResources(rows)));
+  return attachTagsAndFavicons(mapRowsToResources(rows));
 }
 
 export async function listResourceAuditLogs(

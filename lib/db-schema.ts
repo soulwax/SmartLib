@@ -38,6 +38,11 @@ export const resourceCards = pgTable(
     index("resource_cards_created_at_idx").on(table.createdAt),
     index("resource_cards_workspace_id_idx").on(table.workspaceId),
     index("resource_cards_owner_user_id_idx").on(table.ownerUserId),
+    // Partial index covering only active (non-deleted) rows — used by the
+    // hot listResources query: WHERE deleted_at IS NULL AND workspace_id = ?
+    index("resource_cards_workspace_id_active_idx")
+      .on(table.workspaceId)
+      .where(sql`${table.deletedAt} IS NULL`),
   ]
 )
 

@@ -372,6 +372,12 @@ export async function ensureSchema() {
     `;
 
     await sql`
+      CREATE INDEX IF NOT EXISTS resource_cards_workspace_id_active_idx
+      ON resource_cards (workspace_id)
+      WHERE deleted_at IS NULL
+    `;
+
+    await sql`
       DROP INDEX IF EXISTS resource_categories_name_lower_idx
     `;
 

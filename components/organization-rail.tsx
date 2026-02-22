@@ -63,6 +63,7 @@ export function OrganizationRail({
 }: OrganizationRailProps) {
   const isVertical = orientation === "vertical";
   const buttonSizeClass = compactMode ? "h-8 w-8" : "h-9 w-9";
+  const buttonRadiusClass = "rounded-xl";
   const sortedOrganizations = useMemo(
     () =>
       [...organizations].sort((left, right) =>
@@ -90,7 +91,7 @@ export function OrganizationRail({
                   key={`organization-skeleton-${index}`}
                   className={cn(
                     buttonSizeClass,
-                    "rounded-xl",
+                    buttonRadiusClass,
                     !isVertical ? "shrink-0" : undefined,
                   )}
                 />
@@ -111,8 +112,11 @@ export function OrganizationRail({
                           "group/organization relative flex items-center justify-center overflow-hidden border text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                           buttonSizeClass,
                           isActive
-                            ? "rounded-xl border-primary bg-primary text-primary-foreground shadow-sm"
-                            : "rounded-xl border-border bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
+                            ? cn(buttonRadiusClass, "border-primary bg-primary text-primary-foreground shadow-sm")
+                            : cn(
+                                buttonRadiusClass,
+                                "border-border bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
+                              ),
                         )}
                       >
                         <span>{badge}</span>
@@ -140,7 +144,8 @@ export function OrganizationRail({
                   disableTooltip
                   className={cn(
                     buttonSizeClass,
-                    "rounded-xl border border-dashed border-border text-muted-foreground transition-all hover:text-foreground",
+                    buttonRadiusClass,
+                    "border border-dashed border-border text-muted-foreground transition-all hover:text-foreground",
                     isVertical ? "mt-1" : undefined,
                   )}
                   onClick={onCreateOrganization}
@@ -173,7 +178,8 @@ export function OrganizationRail({
                 disableTooltip
                 className={cn(
                   buttonSizeClass,
-                  "rounded-xl border border-border text-muted-foreground transition-all hover:text-foreground",
+                  buttonRadiusClass,
+                  "border border-border text-muted-foreground transition-all hover:text-foreground",
                 )}
                 onClick={onOpenSettings}
                 aria-label="Open general settings"

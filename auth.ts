@@ -33,8 +33,19 @@ const authSecret =
 
 const githubClientId = process.env.GITHUB_CLIENT_ID?.trim();
 const githubClientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
+// Maximum age before we re-fetch/refresh auth-related state (e.g. role/admin flags)
+// for a token-backed session. Five minutes is a compromise between:
+// - keeping authorization decisions reasonably fresh (shorter TTL = less staleness)
+// - avoiding excessive database / auth-service load (longer TTL = fewer refreshes).
+// Adjusting this value affects that tradeoff and should be done with care.
+
 const TOKEN_AUTH_STATE_REFRESH_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * Returns true if the JWT token contains all required fields for a 'complete' auth state.
+ * Required fields: role (string), isAdmin (boolean), isFirstAdmin (boolean), email (non-empty string).
+ * This is used to determine if the token is sufficiently hydrated for authorization decisions.
+ */
 function isAuthStateComplete(token: JWT): boolean {
   return (
     typeof token.role === "string" &&

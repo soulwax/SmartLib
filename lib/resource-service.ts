@@ -4,7 +4,7 @@ import {
   ensureSuperAdminSeeded,
   findFirstAdminAuthUser,
 } from "@/lib/auth-service";
-import { hasDatabaseEnv } from "@/lib/env";
+import { hasDatabaseEnv, getBooleanEnv } from "@/lib/env";
 import { loadLibraryResourcesFromFile } from "@/lib/library-parser";
 import {
   createMockResourceCategory,
@@ -68,14 +68,6 @@ import type {
 
 export type ResourceDataMode = "database" | "mock";
 
-function getBooleanEnv(key: string, defaultValue: boolean = false): boolean {
-  const raw = process.env[key];
-  if (raw == null) {
-    return defaultValue;
-  }
-  return raw.trim().toLowerCase() === "true";
-}
-
 let databaseBootstrap: Promise<void> | null = null;
 const ENABLE_RESOURCE_STARTUP_MAINTENANCE = getBooleanEnv(
   "RESOURCE_STARTUP_MAINTENANCE",
@@ -126,11 +118,11 @@ async function ensureDatabaseBootstrapped() {
 
   databaseBootstrap = (async () => {
     await ensureSuperAdminSeeded();
-    const hasExistingResources = await hasAnyDbResources();
-    if (hasExistingResources && !ENABLE_RESOURCE_STARTUP_MAINTENANCE) {
+    if (!ENABLE_RESOURCE_STARTUP_MAINTENANCE) {
       return;
     }
 
+    const hasExistingResources = await hasAnyDbResources();
     const { user: firstAdminUser } = await findFirstAdminAuthUser();
     const firstAdminUserId = firstAdminUser?.id ?? null;
 

@@ -25,5 +25,6 @@ declare module "next-auth/jwt" {
     role?: UserRole
     isAdmin?: boolean
     isFirstAdmin?: boolean
+    authStateRefreshedAt?: number
   }
 }

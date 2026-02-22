@@ -1,8 +1,11 @@
-import "server-only"
+import "server-only";
 
-import { ensureSuperAdminSeeded, findFirstAdminAuthUser } from "@/lib/auth-service"
-import { hasDatabaseEnv } from "@/lib/env"
-import { loadLibraryResourcesFromFile } from "@/lib/library-parser"
+import {
+  ensureSuperAdminSeeded,
+  findFirstAdminAuthUser,
+} from "@/lib/auth-service";
+import { hasDatabaseEnv } from "@/lib/env";
+import { loadLibraryResourcesFromFile } from "@/lib/library-parser";
 import {
   createMockResourceCategory,
   createMockResourceOrganization,
@@ -25,7 +28,7 @@ import {
   updateMockResourceCategory,
   restoreMockResource,
   updateMockResource,
-} from "@/lib/mock-resource-store"
+} from "@/lib/mock-resource-store";
 import {
   createResourceCategory as createDbResourceCategory,
   createResourceOrganization as createDbResourceOrganization,
@@ -50,7 +53,7 @@ import {
   updateResourceCategory as updateDbResourceCategory,
   restoreResource as restoreDbResource,
   updateResource as updateDbResource,
-} from "@/lib/resource-repository"
+} from "@/lib/resource-repository";
 import type {
   MoveResourceItemInput,
   MoveResourceItemResult,
@@ -61,14 +64,42 @@ import type {
   ResourceOrganization,
   ResourceInput,
   ResourceWorkspace,
-} from "@/lib/resources"
+} from "@/lib/resources";
 
-export type ResourceDataMode = "database" | "mock"
+export type ResourceDataMode = "database" | "mock";
 
-let databaseBootstrap: Promise<void> | null = null
+function getBooleanEnv(key: string, defaultValue: boolean = false): boolean {
+  const raw = process.env[key];
+  if (raw == null) {
+    return defaultValue;
+  }
+  return raw.trim().toLowerCase() === "true";
+}
+
+let databaseBootstrap: Promise<void> | null = null;
+const ENABLE_RESOURCE_STARTUP_MAINTENANCE = getBooleanEnv(
+  "RESOURCE_STARTUP_MAINTENANCE",
+  false,
+);
 
 function currentMode(): ResourceDataMode {
-  return hasDatabaseEnv() ? "database" : "mock"
+  return hasDatabaseEnv() ? "database" : "mock";
+}
+
+/**
+ * Helper to run DB or mock logic based on mode.
+ * Reduces repetition in service functions.
+ */
+async function withMode<T>(
+  dbFn: () => Promise<T>,
+  mockFn: () => Promise<T>,
+): Promise<{ mode: ResourceDataMode; data: T }> {
+  const mode = currentMode();
+  if (mode === "database") {
+    await ensureDatabaseBootstrapped();
+    return { mode, data: await dbFn() };
+  }
+  return { mode, data: await mockFn() };
 }
 
 function toResourceInput(resource: ResourceCard): ResourceInput {
@@ -80,165 +111,156 @@ function toResourceInput(resource: ResourceCard): ResourceInput {
       label: link.label,
       note: link.note ?? undefined,
     })),
-  }
+  };
 }
 
+/**
+ * Ensures the database is bootstrapped and maintenance is run if needed.
+ * Throws on error. Idempotent.
+ */
 async function ensureDatabaseBootstrapped() {
   if (databaseBootstrap !== null) {
-    await databaseBootstrap
-    return
+    await databaseBootstrap;
+    return;
   }
 
   databaseBootstrap = (async () => {
-    await ensureSuperAdminSeeded()
-    const { user: firstAdminUser } = await findFirstAdminAuthUser()
-    const firstAdminUserId = firstAdminUser?.id ?? null
-
-    if (firstAdminUserId) {
-      await backfillDbResourceOwnershipToFirstAdmin(firstAdminUserId)
+    await ensureSuperAdminSeeded();
+    const hasExistingResources = await hasAnyDbResources();
+    if (hasExistingResources && !ENABLE_RESOURCE_STARTUP_MAINTENANCE) {
+      return;
     }
-    await mergeDbDuplicateResourceCategories()
 
-    const hasExistingResources = await hasAnyDbResources()
+    const { user: firstAdminUser } = await findFirstAdminAuthUser();
+    const firstAdminUserId = firstAdminUser?.id ?? null;
+
+    const runMaintenance = async () => {
+      if (firstAdminUserId) {
+        await backfillDbResourceOwnershipToFirstAdmin(firstAdminUserId);
+      }
+      await mergeDbDuplicateResourceCategories();
+    };
+
     if (hasExistingResources) {
-      return
+      await runMaintenance();
+      return;
     }
 
-    const libraryResources = loadLibraryResourcesFromFile()
+    const libraryResources = loadLibraryResourcesFromFile();
     if (libraryResources.length === 0) {
-      return
+      await runMaintenance();
+      return;
     }
 
     for (const resource of libraryResources) {
       await createDbResource(toResourceInput(resource), {
         ownerUserId: null,
-      })
+      });
     }
 
-    if (firstAdminUserId) {
-      await backfillDbResourceOwnershipToFirstAdmin(firstAdminUserId)
-    }
-    await mergeDbDuplicateResourceCategories()
-  })()
+    await runMaintenance();
+  })();
 
   try {
-    await databaseBootstrap
+    await databaseBootstrap;
   } catch (error) {
-    databaseBootstrap = null
-    throw error
+    databaseBootstrap = null;
+    throw error;
   }
 }
 
 export async function listResourceWorkspacesService(options?: {
-  userId?: string | null
-  organizationId?: string | null
-  includeAllWorkspaces?: boolean
+  userId?: string | null;
+  organizationId?: string | null;
+  includeAllWorkspaces?: boolean;
 }): Promise<{ mode: ResourceDataMode; workspaces: ResourceWorkspace[] }> {
-  const mode = currentMode()
-
-  if (mode === "database") {
-    await ensureDatabaseBootstrapped()
-
-    return {
-      mode,
-      workspaces: await listDbResourceWorkspaces({
+  return withMode(
+    () =>
+      listDbResourceWorkspaces({
         userId: options?.userId,
         organizationId: options?.organizationId,
         includeAllWorkspaces: options?.includeAllWorkspaces,
       }),
-    }
-  }
-
-  return {
-    mode,
-    workspaces: await listMockResourceWorkspaces({
-      userId: options?.userId,
-      organizationId: options?.organizationId,
-      includeAllWorkspaces: options?.includeAllWorkspaces,
-    }),
-  }
+    () =>
+      listMockResourceWorkspaces({
+        userId: options?.userId,
+        organizationId: options?.organizationId,
+        includeAllWorkspaces: options?.includeAllWorkspaces,
+      }),
+  ).then(({ mode, data }) => ({ mode, workspaces: data }));
 }
 
 export async function listResourceOrganizationsService(options?: {
-  userId?: string | null
-  includeAllWorkspaces?: boolean
+  userId?: string | null;
+  includeAllWorkspaces?: boolean;
 }): Promise<{ mode: ResourceDataMode; organizations: ResourceOrganization[] }> {
-  const mode = currentMode()
-
-  if (mode === "database") {
-    await ensureDatabaseBootstrapped()
-
-    return {
-      mode,
-      organizations: await listDbResourceOrganizations({
+  return withMode(
+    () =>
+      listDbResourceOrganizations({
         userId: options?.userId,
         includeAllWorkspaces: options?.includeAllWorkspaces,
       }),
-    }
-  }
-
-  return {
-    mode,
-    organizations: await listMockResourceOrganizations({
-      userId: options?.userId,
-      includeAllWorkspaces: options?.includeAllWorkspaces,
-    }),
-  }
+    () =>
+      listMockResourceOrganizations({
+        userId: options?.userId,
+        includeAllWorkspaces: options?.includeAllWorkspaces,
+      }),
+  ).then(({ mode, data }) => ({ mode, organizations: data }));
 }
 
 export async function createResourceOrganizationService(
   name: string,
 ): Promise<{ mode: ResourceDataMode; organization: ResourceOrganization }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
     return {
       mode,
       organization: await createDbResourceOrganization(name),
-    }
+    };
   }
 
   return {
     mode,
     organization: await createMockResourceOrganization(name),
-  }
+  };
 }
 
 export async function createResourceWorkspaceService(
   name: string,
   options: {
-    ownerUserId: string
-    organizationId?: string | null
-    includeAllWorkspaces?: boolean
-  }
+    ownerUserId: string;
+    organizationId?: string | null;
+    includeAllWorkspaces?: boolean;
+  },
 ): Promise<{ mode: ResourceDataMode; workspace: ResourceWorkspace }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
     return {
       mode,
       workspace: await createDbResourceWorkspace(name, options),
-    }
+    };
   }
 
   return {
     mode,
     workspace: await createMockResourceWorkspace(name, options),
-  }
+  };
 }
 
 export async function listResourcesService(options?: {
-  userId?: string | null
-  workspaceId?: string | null
-  includeAllWorkspaces?: boolean
+  userId?: string | null;
+  workspaceId?: string | null;
+  includeAllWorkspaces?: boolean;
 }): Promise<{
-  mode: ResourceDataMode
-  resources: ResourceCard[]
+  mode: ResourceDataMode;
+  resources: ResourceCard[];
 }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
@@ -247,7 +269,7 @@ export async function listResourcesService(options?: {
         workspaceId: options?.workspaceId,
         includeAllWorkspaces: options?.includeAllWorkspaces,
       }),
-    }
+    };
   }
 
   return {
@@ -257,24 +279,24 @@ export async function listResourcesService(options?: {
       workspaceId: options?.workspaceId,
       includeAllWorkspaces: options?.includeAllWorkspaces,
     }),
-  }
+  };
 }
 
 export async function listResourcesPageService(options?: {
-  userId?: string | null
-  workspaceId?: string | null
-  includeAllWorkspaces?: boolean
-  offset?: number
-  limit?: number
+  userId?: string | null;
+  workspaceId?: string | null;
+  includeAllWorkspaces?: boolean;
+  offset?: number;
+  limit?: number;
 }): Promise<{
-  mode: ResourceDataMode
-  resources: ResourceCard[]
-  nextOffset: number | null
+  mode: ResourceDataMode;
+  resources: ResourceCard[];
+  nextOffset: number | null;
 }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     const result = await listDbResourcesPage({
       userId: options?.userId,
@@ -282,8 +304,8 @@ export async function listResourcesPageService(options?: {
       includeAllWorkspaces: options?.includeAllWorkspaces,
       offset: options?.offset,
       limit: options?.limit,
-    })
-    return { mode, ...result }
+    });
+    return { mode, ...result };
   }
 
   const result = await listMockResourcesPage({
@@ -292,21 +314,21 @@ export async function listResourcesPageService(options?: {
     includeAllWorkspaces: options?.includeAllWorkspaces,
     offset: options?.offset,
     limit: options?.limit,
-  })
-  return { mode, ...result }
+  });
+  return { mode, ...result };
 }
 
 export async function listResourceWorkspaceCountsService(options?: {
-  userId?: string | null
-  includeAllWorkspaces?: boolean
+  userId?: string | null;
+  includeAllWorkspaces?: boolean;
 }): Promise<{
-  mode: ResourceDataMode
-  countsByWorkspace: Record<string, number>
+  mode: ResourceDataMode;
+  countsByWorkspace: Record<string, number>;
 }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
@@ -314,7 +336,7 @@ export async function listResourceWorkspaceCountsService(options?: {
         userId: options?.userId,
         includeAllWorkspaces: options?.includeAllWorkspaces,
       }),
-    }
+    };
   }
 
   return {
@@ -323,21 +345,21 @@ export async function listResourceWorkspaceCountsService(options?: {
       userId: options?.userId,
       includeAllWorkspaces: options?.includeAllWorkspaces,
     }),
-  }
+  };
 }
 
 export async function listResourceCategoriesService(options?: {
-  userId?: string | null
-  workspaceId?: string | null
-  includeAllWorkspaces?: boolean
+  userId?: string | null;
+  workspaceId?: string | null;
+  includeAllWorkspaces?: boolean;
 }): Promise<{
-  mode: ResourceDataMode
-  categories: ResourceCategory[]
+  mode: ResourceDataMode;
+  categories: ResourceCategory[];
 }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
@@ -346,7 +368,7 @@ export async function listResourceCategoriesService(options?: {
         workspaceId: options?.workspaceId,
         includeAllWorkspaces: options?.includeAllWorkspaces,
       }),
-    }
+    };
   }
 
   return {
@@ -356,39 +378,39 @@ export async function listResourceCategoriesService(options?: {
       workspaceId: options?.workspaceId,
       includeAllWorkspaces: options?.includeAllWorkspaces,
     }),
-  }
+  };
 }
 
 export async function createResourceCategoryService(
   name: string,
   symbol?: string | null,
   options?: {
-    workspaceId?: string
-    ownerUserId?: string | null
-    includeAllWorkspaces?: boolean
-  }
+    workspaceId?: string;
+    ownerUserId?: string | null;
+    includeAllWorkspaces?: boolean;
+  },
 ): Promise<{ mode: ResourceDataMode; category: ResourceCategory }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
       category: await createDbResourceCategory(name, symbol, options),
-    }
+    };
   }
 
   return {
     mode,
     category: await createMockResourceCategory(name, symbol, options),
-  }
+  };
 }
 
 export async function updateResourceCategorySymbolService(
   id: string,
   symbol: string | null,
-  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean },
 ): Promise<{ mode: ResourceDataMode; category: ResourceCategory }> {
   return updateResourceCategoryService(
     id,
@@ -396,62 +418,62 @@ export async function updateResourceCategorySymbolService(
     {
       actorUserId: options?.actorUserId,
       includeAllWorkspaces: options?.includeAllWorkspaces,
-    }
-  )
+    },
+  );
 }
 
 export async function updateResourceCategoryService(
   id: string,
   input: { name?: string; symbol?: string | null },
-  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean },
 ): Promise<{ mode: ResourceDataMode; category: ResourceCategory }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
       category: await updateDbResourceCategory(id, input, options),
-    }
+    };
   }
 
   return {
     mode,
     category: await updateMockResourceCategory(id, input, options),
-  }
+  };
 }
 
 export async function deleteResourceCategoryService(
   id: string,
-  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean },
 ): Promise<{
-  mode: ResourceDataMode
-  deletedCategory: ResourceCategory
-  reassignedCategory: ResourceCategory
-  reassignedResources: number
+  mode: ResourceDataMode;
+  deletedCategory: ResourceCategory;
+  reassignedCategory: ResourceCategory;
+  reassignedResources: number;
 }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
-    const result = await deleteDbResourceCategory(id, options)
-    return { mode, ...result }
+    const result = await deleteDbResourceCategory(id, options);
+    return { mode, ...result };
   }
 
-  const result = await deleteMockResourceCategory(id, options)
-  return { mode, ...result }
+  const result = await deleteMockResourceCategory(id, options);
+  return { mode, ...result };
 }
 
 export async function createResourceService(
   input: ResourceInput,
-  options?: { ownerUserId?: string | null; includeAllWorkspaces?: boolean }
+  options?: { ownerUserId?: string | null; includeAllWorkspaces?: boolean },
 ): Promise<{ mode: ResourceDataMode; resource: ResourceCard }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
@@ -459,7 +481,7 @@ export async function createResourceService(
         ownerUserId: options?.ownerUserId ?? null,
         includeAllWorkspaces: options?.includeAllWorkspaces,
       }),
-    }
+    };
   }
 
   return {
@@ -468,44 +490,44 @@ export async function createResourceService(
       ownerUserId: options?.ownerUserId ?? null,
       includeAllWorkspaces: options?.includeAllWorkspaces,
     }),
-  }
+  };
 }
 
 export async function listResourcesIncludingDeletedService(): Promise<{
-  mode: ResourceDataMode
-  resources: ResourceCard[]
+  mode: ResourceDataMode;
+  resources: ResourceCard[];
 }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
       resources: await listDbResourcesIncludingDeleted(),
-    }
+    };
   }
 
-  const hasResources = await hasAnyMockResources()
+  const hasResources = await hasAnyMockResources();
   if (!hasResources) {
-    return { mode, resources: [] }
+    return { mode, resources: [] };
   }
 
   return {
     mode,
     resources: await listMockResourcesIncludingDeleted(),
-  }
+  };
 }
 
 export async function updateResourceService(
   id: string,
   input: ResourceInput,
-  options?: { ownerUserId?: string | null; includeAllWorkspaces?: boolean }
+  options?: { ownerUserId?: string | null; includeAllWorkspaces?: boolean },
 ): Promise<{ mode: ResourceDataMode; resource: ResourceCard }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
@@ -513,7 +535,7 @@ export async function updateResourceService(
         ownerUserId: options?.ownerUserId ?? null,
         includeAllWorkspaces: options?.includeAllWorkspaces,
       }),
-    }
+    };
   }
 
   return {
@@ -522,88 +544,88 @@ export async function updateResourceService(
       ownerUserId: options?.ownerUserId ?? null,
       includeAllWorkspaces: options?.includeAllWorkspaces,
     }),
-  }
+  };
 }
 
 export async function moveResourceItemService(
   input: MoveResourceItemInput,
-  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean }
+  options?: { actorUserId?: string | null; includeAllWorkspaces?: boolean },
 ): Promise<{ mode: ResourceDataMode } & MoveResourceItemResult> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     const result = await moveDbResourceItem(input, {
       actorUserId: options?.actorUserId ?? null,
       includeAllWorkspaces: options?.includeAllWorkspaces,
-    })
-    return { mode, ...result }
+    });
+    return { mode, ...result };
   }
 
   const result = await moveMockResourceItem(input, {
     actorUserId: options?.actorUserId ?? null,
     includeAllWorkspaces: options?.includeAllWorkspaces,
-  })
-  return { mode, ...result }
+  });
+  return { mode, ...result };
 }
 
 export async function deleteResourceService(
   id: string,
-  actor?: ResourceAuditActor
+  actor?: ResourceAuditActor,
 ): Promise<{ mode: ResourceDataMode }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
-    await deleteDbResource(id, actor)
-    return { mode }
+    await deleteDbResource(id, actor);
+    return { mode };
   }
 
-  await deleteMockResource(id, actor)
-  return { mode }
+  await deleteMockResource(id, actor);
+  return { mode };
 }
 
 export async function restoreResourceService(
   id: string,
-  actor?: ResourceAuditActor
+  actor?: ResourceAuditActor,
 ): Promise<{ mode: ResourceDataMode; resource: ResourceCard }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
       resource: await restoreDbResource(id, actor),
-    }
+    };
   }
 
   return {
     mode,
     resource: await restoreMockResource(id, actor),
-  }
+  };
 }
 
 export async function listResourceAuditLogsService(
-  limit = 200
+  limit = 200,
 ): Promise<{ mode: ResourceDataMode; logs: ResourceAuditLogEntry[] }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await ensureDatabaseBootstrapped()
+    await ensureDatabaseBootstrapped();
 
     return {
       mode,
       logs: await listDbResourceAuditLogs(limit),
-    }
+    };
   }
 
   return {
     mode,
     logs: await listMockResourceAuditLogs(limit),
-  }
+  };
 }
 
 export async function renameResourceWorkspaceService(
@@ -611,32 +633,32 @@ export async function renameResourceWorkspaceService(
   name: string,
   ownerUserId: string,
 ): Promise<{ mode: ResourceDataMode; workspace: ResourceWorkspace }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
     return {
       mode,
       workspace: await renameDbResourceWorkspace(id, name, ownerUserId),
-    }
+    };
   }
 
   return {
     mode,
     workspace: await renameMockResourceWorkspace(id, name, ownerUserId),
-  }
+  };
 }
 
 export async function deleteResourceWorkspaceService(
   id: string,
   ownerUserId: string,
 ): Promise<{ mode: ResourceDataMode }> {
-  const mode = currentMode()
+  const mode = currentMode();
 
   if (mode === "database") {
-    await deleteDbResourceWorkspace(id, ownerUserId)
-    return { mode }
+    await deleteDbResourceWorkspace(id, ownerUserId);
+    return { mode };
   }
 
-  await deleteMockResourceWorkspace(id, ownerUserId)
-  return { mode }
+  await deleteMockResourceWorkspace(id, ownerUserId);
+  return { mode };
 }

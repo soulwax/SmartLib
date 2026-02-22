@@ -11,6 +11,8 @@ import * as schema from "@/lib/db-schema";
 let sqlClient: NeonQueryFunction<false, false> | null = null;
 let dbClient: NeonHttpDatabase<typeof schema> | null = null;
 let schemaReady: Promise<void> | null = null;
+const FAVICON_CACHE_LAST_CHECKED_AT_INDEX_REGCLASS =
+  "public.favicon_cache_last_checked_at_idx";
 
 function getSql(): NeonQueryFunction<false, false> {
   if (sqlClient !== null) {
@@ -37,6 +39,18 @@ export function resetDatabaseClientForTests() {
   schemaReady = null;
 }
 
+async function hasFaviconCacheReadyMarker(
+  sql: NeonQueryFunction<false, false>,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT to_regclass(${FAVICON_CACHE_LAST_CHECKED_AT_INDEX_REGCLASS})::text AS marker_name
+  `;
+  const markerName = (
+    rows[0] as { marker_name?: string | null } | undefined
+  )?.marker_name;
+  return typeof markerName === "string" && markerName.length > 0;
+}
+
 export async function ensureSchema() {
   if (schemaReady !== null) {
     await schemaReady;
@@ -46,6 +60,10 @@ export async function ensureSchema() {
   const sql = getSql();
 
   schemaReady = (async () => {
+    if (await hasFaviconCacheReadyMarker(sql)) {
+      return;
+    }
+
     await sql`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`;
 
     await sql`

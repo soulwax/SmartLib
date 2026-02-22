@@ -870,6 +870,7 @@ export default function Page() {
   const resizeRafIdRef = useRef<number | null>(null);
   const pendingSidebarWidthRef = useRef<number | null>(null);
   const snapshotRequestIdRef = useRef(0);
+  const snapshotInFlightSelectionKeyRef = useRef<string | null>(null);
   const previousOrganizationIdRef = useRef<string | null>(null);
   const previousWorkspaceIdRef = useRef<string | null>(null);
   const [editingResource, setEditingResource] = useState<ResourceCard | null>(
@@ -1874,6 +1875,15 @@ export default function Page() {
       organizationId: string | null;
       workspaceId: string | null;
     }) => {
+      const selectionKey = [
+        selection.organizationId ?? "__all_organizations__",
+        selection.workspaceId ?? "__all_workspaces__",
+      ].join("::");
+      if (snapshotInFlightSelectionKeyRef.current === selectionKey) {
+        return;
+      }
+      snapshotInFlightSelectionKeyRef.current = selectionKey;
+
       const requestId = snapshotRequestIdRef.current + 1;
       snapshotRequestIdRef.current = requestId;
       setIsResourcesLoading(true);
@@ -1938,6 +1948,10 @@ export default function Page() {
         );
         setResourcesNextOffset(null);
       } finally {
+        if (snapshotInFlightSelectionKeyRef.current === selectionKey) {
+          snapshotInFlightSelectionKeyRef.current = null;
+        }
+
         if (snapshotRequestIdRef.current !== requestId) {
           return;
         }
@@ -2059,7 +2073,6 @@ export default function Page() {
     hasResolvedInitialWorkspace,
     loadLibrarySnapshot,
     sessionStatus,
-    sessionUserId,
   ]);
 
   useEffect(() => {

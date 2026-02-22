@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-02-22
+
+### Changed
+
+- Database schema initialization now short-circuits when the latest schema marker already exists, reducing cold-route overhead for library endpoints
+- Resource bootstrap no longer runs heavy ownership/category maintenance on every process start when resources already exist (with opt-in override via `RESOURCE_STARTUP_MAINTENANCE=true`)
+- Auth session token hydration now refreshes user role/admin state on a short TTL instead of hitting the database on every request
+
+### Fixed
+
+- Prevented duplicate initial `GET /api/library/bootstrap` requests for the same organization/workspace selection during page startup
+
 ## [0.2.4] - 2026-02-22
 
 ### Added

@@ -2,8 +2,6 @@
 
 import { useMemo } from "react";
 
-import pkg from "@/package.json";
-
 import type { ResourceWorkspace } from "@/lib/resources";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -14,7 +12,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus, Settings } from "lucide-react";
+import { Plus } from "lucide-react";
 
 type WorkspaceRailOrientation = "vertical" | "horizontal";
 
@@ -23,9 +21,7 @@ interface WorkspaceRailProps {
   activeWorkspaceId: string | null;
   onWorkspaceChange: (workspaceId: string) => void;
   onCreateWorkspace?: () => void;
-  onOpenSettings?: () => void;
   canCreateWorkspace?: boolean;
-  showSettingsButton?: boolean;
   resourceCountsByWorkspace?: Record<string, number>;
   orientation?: WorkspaceRailOrientation;
   isLoading?: boolean;
@@ -55,9 +51,7 @@ export function WorkspaceRail({
   activeWorkspaceId,
   onWorkspaceChange,
   onCreateWorkspace,
-  onOpenSettings,
   canCreateWorkspace = false,
-  showSettingsButton = false,
   resourceCountsByWorkspace = {},
   orientation = "vertical",
   isLoading = false,
@@ -87,7 +81,7 @@ export function WorkspaceRail({
       <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
         <div
           className={cn(
-            compactMode ? "flex gap-1 p-1" : "flex gap-1.5 p-2",
+            compactMode ? "flex gap-1 p-1.5" : "flex gap-1.5 p-2",
             isVertical ? "h-full flex-col items-center" : "items-center",
           )}
         >
@@ -169,43 +163,6 @@ export function WorkspaceRail({
           ) : null}
         </div>
       </ScrollArea>
-
-      {showSettingsButton && isVertical ? (
-        <div
-          className={cn(
-            "mt-auto flex flex-col items-center border-t border-border/70",
-            compactMode ? "pb-1 pt-1" : "pb-2 pt-2",
-          )}
-        >
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                disableTooltip
-                className={cn(
-                  workspaceButtonSizeClass,
-                  "rounded-full border border-border text-muted-foreground transition-all hover:rounded-xl hover:text-foreground",
-                )}
-                onClick={onOpenSettings}
-                aria-label="Open general settings"
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">General settings</TooltipContent>
-          </Tooltip>
-          <span
-            className={cn(
-              "select-none leading-none tracking-wide text-muted-foreground/50",
-              compactMode ? "mt-0.5 text-[8px]" : "mt-1 text-[9px]",
-            )}
-          >
-            v{pkg.version}
-          </span>
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -5342,6 +5342,8 @@ export default function Page() {
             }}
             canCreateOrganization={canCreateOrganizations}
             onCreateOrganization={handleOpenCreateOrganizationDialog}
+            showSettingsButton
+            onOpenSettings={() => setGeneralSettingsOpen(true)}
           />
         </aside>
 
@@ -5363,8 +5365,6 @@ export default function Page() {
             }}
             canCreateWorkspace={canCreateWorkspaces}
             onCreateWorkspace={handleOpenCreateWorkspaceDialog}
-            showSettingsButton
-            onOpenSettings={() => setGeneralSettingsOpen(true)}
             resourceCountsByWorkspace={workspaceResourceCounts}
           />
         </aside>

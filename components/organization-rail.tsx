@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 
+import pkg from "@/package.json";
+
 import type { ResourceOrganization } from "@/lib/resources";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -12,7 +14,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus } from "lucide-react";
+import { Plus, Settings } from "lucide-react";
 
 type OrganizationRailOrientation = "vertical" | "horizontal";
 
@@ -21,7 +23,9 @@ interface OrganizationRailProps {
   activeOrganizationId: string | null;
   onOrganizationChange: (organizationId: string) => void;
   onCreateOrganization?: () => void;
+  onOpenSettings?: () => void;
   canCreateOrganization?: boolean;
+  showSettingsButton?: boolean;
   orientation?: OrganizationRailOrientation;
   isLoading?: boolean;
   compactMode?: boolean;
@@ -50,7 +54,9 @@ export function OrganizationRail({
   activeOrganizationId,
   onOrganizationChange,
   onCreateOrganization,
+  onOpenSettings,
   canCreateOrganization = false,
+  showSettingsButton = false,
   orientation = "vertical",
   isLoading = false,
   compactMode = false,
@@ -74,7 +80,7 @@ export function OrganizationRail({
       <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
         <div
           className={cn(
-            compactMode ? "flex gap-1 p-1" : "flex gap-1.5 p-2",
+            compactMode ? "flex gap-1 p-1.5" : "flex gap-1.5 p-2",
             isVertical ? "h-full flex-col items-center" : "items-center",
           )}
         >
@@ -150,6 +156,43 @@ export function OrganizationRail({
           ) : null}
         </div>
       </ScrollArea>
+
+      {showSettingsButton && isVertical ? (
+        <div
+          className={cn(
+            "mt-auto flex flex-col items-center border-t border-border/70",
+            compactMode ? "pb-1 pt-1" : "pb-2 pt-2",
+          )}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disableTooltip
+                className={cn(
+                  buttonSizeClass,
+                  "rounded-xl border border-border text-muted-foreground transition-all hover:text-foreground",
+                )}
+                onClick={onOpenSettings}
+                aria-label="Open general settings"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">General settings</TooltipContent>
+          </Tooltip>
+          <span
+            className={cn(
+              "select-none leading-none tracking-wide text-muted-foreground/50",
+              compactMode ? "mt-0.5 text-[8px]" : "mt-1 text-[9px]",
+            )}
+          >
+            v{pkg.version}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

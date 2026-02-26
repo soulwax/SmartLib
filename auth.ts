@@ -146,26 +146,45 @@ export const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async signIn({ user, account }) {
-      const identifier = user.email?.trim().toLowerCase();
-      if (!identifier) {
+      try {
+        console.log("[auth] signIn callback triggered", {
+          provider: account?.provider,
+          userEmail: user.email,
+          userId: user.id,
+        });
+
+        const identifier = user.email?.trim().toLowerCase();
+        if (!identifier) {
+          console.error("[auth] signIn failed: no email provided by OAuth provider");
+          return false;
+        }
+
+        const isCredentialsSignIn = account?.provider === "credentials";
+        const isGitHubSignIn = account?.provider === "github";
+
+        const { user: syncedUser } = await ensureAuthUserForSignIn(identifier, {
+          allowCreate: !isCredentialsSignIn,
+          autoVerifyEmail: isGitHubSignIn,
+          requireVerifiedEmail: isCredentialsSignIn,
+        });
+
+        user.id = syncedUser.id;
+        user.email = syncedUser.email;
+        user.role = syncedUser.role;
+        user.isAdmin = syncedUser.isAdmin;
+        user.isFirstAdmin = syncedUser.isFirstAdmin;
+
+        console.log("[auth] signIn successful", {
+          userId: user.id,
+          email: user.email,
+          role: user.role,
+        });
+
+        return true;
+      } catch (error) {
+        console.error("[auth] signIn callback error:", error);
         return false;
       }
-
-      const isCredentialsSignIn = account?.provider === "credentials";
-      const isGitHubSignIn = account?.provider === "github";
-
-      const { user: syncedUser } = await ensureAuthUserForSignIn(identifier, {
-        allowCreate: !isCredentialsSignIn,
-        autoVerifyEmail: isGitHubSignIn,
-        requireVerifiedEmail: isCredentialsSignIn,
-      });
-      user.id = syncedUser.id;
-      user.email = syncedUser.email;
-      user.role = syncedUser.role;
-      user.isAdmin = syncedUser.isAdmin;
-      user.isFirstAdmin = syncedUser.isFirstAdmin;
-
-      return true;
     },
     async jwt({ token, user }) {
       const now = Date.now();

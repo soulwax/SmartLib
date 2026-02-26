@@ -17,12 +17,22 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Plus, Tag, X } from "lucide-react"
+import { Loader2, Plus, Sparkles, Tag, X } from "lucide-react"
 
 interface LinkInput {
   url: string
   label: string
   note: string
+}
+
+interface LinkSuggestionResponse {
+  url?: string
+  label?: string
+  note?: string
+  category?: string
+  tags?: string[]
+  model?: string
+  error?: string
 }
 
 interface AddResourceModalProps {
@@ -54,6 +64,7 @@ export function AddResourceModal({
   const [links, setLinks] = useState<LinkInput[]>([
     { url: "", label: "", note: "" },
   ])
+  const [aiLoadingForLink, setAiLoadingForLink] = useState<number | null>(null)
   const hasInitializedForCurrentOpenRef = useRef(false)
 
   const categoryOptions = useMemo(() => {
@@ -74,6 +85,7 @@ export function AddResourceModal({
     setTags([])
     setTagDraft("")
     setLinks([{ url: "", label: "", note: "" }])
+    setAiLoadingForLink(null)
   }, [])
 
   const initFromEditing = useCallback(() => {
@@ -164,6 +176,76 @@ export function AddResourceModal({
     setTags((previous) =>
       previous.filter((existing) => existing.toLowerCase() !== tag.toLowerCase())
     )
+  }
+
+  const handleAiSuggestion = async (index: number) => {
+    const link = links[index]
+    const url = link.url.trim()
+
+    if (!url) {
+      return
+    }
+
+    setAiLoadingForLink(index)
+
+    try {
+      const response = await fetch("/api/links/suggest-from-url", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url,
+          categories: categoryOptions,
+        }),
+      })
+
+      const data: LinkSuggestionResponse = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to fetch AI suggestions.")
+      }
+
+      // Update the link with AI suggestions
+      setLinks((prev) =>
+        prev.map((l, i) =>
+          i === index
+            ? {
+                ...l,
+                label: data.label?.trim() || l.label,
+                note: data.note?.trim() || l.note,
+              }
+            : l
+        )
+      )
+
+      // Update category if not already set and AI provided one
+      if (data.category?.trim() && !categoryInput.trim()) {
+        setCategoryInput(data.category.trim())
+      }
+
+      // Add new tags from AI (avoid duplicates)
+      if (data.tags && data.tags.length > 0) {
+        setTags((prev) => {
+          const newTags = [...prev]
+          for (const tag of data.tags ?? []) {
+            const normalized = normalizeTag(tag)
+            const exists = newTags.some(
+              (existing) => existing.toLowerCase() === normalized.toLowerCase()
+            )
+            if (!exists && normalized) {
+              newTags.push(normalized)
+            }
+          }
+          return newTags
+        })
+      }
+    } catch (error) {
+      console.error("AI suggestion error:", error)
+      // Silently fail - user can still fill manually
+    } finally {
+      setAiLoadingForLink(null)
+    }
   }
 
   const resolvedCategory = categoryInput.trim()
@@ -332,16 +414,38 @@ export function AddResourceModal({
                     >
                       URL
                     </Label>
-                    <Input
-                      id={`link-url-${index}`}
-                      type="url"
-                      placeholder="https://..."
-                      value={link.url}
-                      onChange={(event) =>
-                        updateLink(index, "url", event.target.value)
-                      }
-                      disabled={isSaving}
-                    />
+                    <div className="flex gap-1">
+                      <Input
+                        id={`link-url-${index}`}
+                        type="url"
+                        placeholder="https://..."
+                        value={link.url}
+                        onChange={(event) =>
+                          updateLink(index, "url", event.target.value)
+                        }
+                        disabled={isSaving}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleAiSuggestion(index)}
+                        disabled={
+                          isSaving ||
+                          !link.url.trim() ||
+                          aiLoadingForLink === index
+                        }
+                        className="h-9 w-9 p-0 shrink-0"
+                        title="Fill with AI suggestions"
+                      >
+                        {aiLoadingForLink === index ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 </div>
 

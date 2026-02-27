@@ -195,8 +195,21 @@ export async function suggestLinkDetailsFromUrl(
 
   if (!response.ok) {
     const errorText = await response.text()
+    console.error("[link-paste-suggester] Perplexity API error:", {
+      status: response.status,
+      statusText: response.statusText,
+      body: errorText.substring(0, 500), // Log first 500 chars for debugging
+    })
+
+    // Don't expose ugly HTML errors to users
+    if (response.status === 401) {
+      throw new Error(
+        "AI suggestions unavailable: API authentication failed. Please check your Perplexity API key."
+      )
+    }
+
     throw new Error(
-      `AI provider request failed (${response.status}). ${errorText || "No response body."}`
+      `AI suggestions unavailable (${response.status}): ${response.statusText || "Unknown error"}`
     )
   }
 

@@ -6,6 +6,20 @@ const RESOLVE_TIMEOUT_MS = 5_000
 const MAX_FAVICON_BYTES = 512 * 1024
 const DEFAULT_FAVICON_SIZE = 64
 
+// Color palette for generated favicons (Material Design inspired)
+const FALLBACK_COLORS = [
+  "#1976D2", // Blue
+  "#388E3C", // Green
+  "#D32F2F", // Red
+  "#7B1FA2", // Purple
+  "#F57C00", // Orange
+  "#0097A7", // Cyan
+  "#C2185B", // Pink
+  "#5D4037", // Brown
+  "#455A64", // Blue Grey
+  "#E64A19", // Deep Orange
+]
+
 export interface ResolvedFaviconPayload {
   sourceUrl: string
   contentType: string
@@ -29,6 +43,45 @@ export function uniqueHostnames(urls: string[]): string[] {
     if (h) seen.add(h)
   }
   return [...seen]
+}
+
+/**
+ * Generate a fallback SVG favicon based on the hostname.
+ * Uses the first 1-2 letters and a consistent color derived from the hostname.
+ */
+function generateFallbackFavicon(hostname: string): ResolvedFaviconPayload {
+  const normalized = hostname.trim().toLowerCase()
+
+  // Extract domain name without TLD for better initials
+  const parts = normalized.split(".")
+  const domain = parts.length > 1 ? parts[parts.length - 2] : parts[0]
+
+  // Get initials (first 2 letters or first letter if short)
+  const initials = domain.length > 1
+    ? domain.substring(0, 2).toUpperCase()
+    : domain.substring(0, 1).toUpperCase()
+
+  // Generate consistent color from hostname hash
+  const hash = createHash("md5").update(normalized).digest("hex")
+  const colorIndex = parseInt(hash.substring(0, 2), 16) % FALLBACK_COLORS.length
+  const bgColor = FALLBACK_COLORS[colorIndex]
+
+  // Create SVG
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="${bgColor}" rx="8"/>
+  <text x="32" y="32" text-anchor="middle" dominant-baseline="central"
+        font-family="system-ui, -apple-system, sans-serif"
+        font-size="28" font-weight="600" fill="white">${initials}</text>
+</svg>`
+
+  const buffer = Buffer.from(svg, "utf-8")
+
+  return {
+    sourceUrl: `generated:${normalized}`,
+    contentType: "image/svg+xml",
+    contentBase64: buffer.toString("base64"),
+    contentHash: createHash("sha256").update(buffer).digest("hex"),
+  }
 }
 
 export function fallbackFaviconUrlForHostname(
@@ -126,7 +179,7 @@ async function fetchFaviconAtUrl(
 
 /**
  * Resolve and download favicon image data for a hostname.
- * The payload is returned in its original image format plus MIME metadata.
+ * Falls back to a generated SVG if no favicon can be fetched.
  */
 export async function resolveFavicon(hostname: string): Promise<ResolvedFaviconPayload | null> {
   if (!hostname) return null
@@ -148,5 +201,6 @@ export async function resolveFavicon(hostname: string): Promise<ResolvedFaviconP
     }
   }
 
-  return null
+  // Generate fallback SVG if no favicon could be fetched
+  return generateFallbackFavicon(hostname)
 }

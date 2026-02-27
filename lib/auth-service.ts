@@ -494,8 +494,17 @@ export async function ensureAuthUserByUsername(
   }
 
   // Create new mock user
-  user = createMockUser(normalizedEmail, passwordHash, options)
-  user.username = normalizedUsername
+  const now = new Date().toISOString()
+  user = {
+    id: crypto.randomUUID(),
+    email: normalizedEmail,
+    username: normalizedUsername,
+    passwordHash,
+    role: options?.role ?? "editor",
+    isAdmin: options?.role === "admin" || options?.role === "first_admin",
+    isFirstAdmin: options?.role === "first_admin",
+    emailVerifiedAt: options?.emailVerifiedAt?.toISOString() ?? now,
+  }
   mockUsersByEmail.set(normalizedEmail, user)
   mockUsersByUsername.set(normalizedUsername, user)
 

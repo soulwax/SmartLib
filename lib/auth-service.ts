@@ -1,6 +1,6 @@
 import "server-only"
 
-import { createHash, randomBytes } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 
 import {
   consumeEmailVerificationToken as consumeDbEmailVerificationToken,
@@ -496,7 +496,7 @@ export async function ensureAuthUserByUsername(
   // Create new mock user
   const now = new Date().toISOString()
   user = {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     email: normalizedEmail,
     username: normalizedUsername,
     passwordHash,

@@ -7,8 +7,9 @@ import { resolveFavicon } from "@/lib/favicon-service"
 export const runtime = "nodejs"
 export const maxDuration = 60
 
-const STALE_AFTER_HOURS = 8
-const BATCH_LIMIT = 300
+// Lazy refresh: check favicons older than 24 hours, process 50 at a time
+const STALE_AFTER_HOURS = 24
+const BATCH_LIMIT = 50
 
 function isAuthorized(request: Request): boolean {
   const cronSecret = process.env.CRON_SECRET

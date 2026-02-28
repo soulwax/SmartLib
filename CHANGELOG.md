@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-02-28
+
+### Added
+
+- Public MVP launch planning document in `TODO.md`, including scope, P0 launch gates, known risks, and success metrics
+- SVG favicon asset and metadata icon configuration for modern browser tab support
+
+### Changed
+
+- Header branding now uses `public/bluesix-cloud-text-logo.png` instead of the previous icon-plus-text mark
+- Library location persistence now stores and restores `organization > workspace > scroll offset` in localStorage for faster context recovery
+
+### Fixed
+
+- Scroll restoration timing now waits for workspace resource load completion to avoid early/jumpy restores during selection changes
+
+### Known Issues
+
+- Scroll offset persistence is currently focused on the desktop main board viewport and may not fully mirror compact-mode interaction states
+- Some browsers may continue showing a stale favicon briefly due to cache retention after deploy
+- Location persistence is browser-local (localStorage) and does not sync across devices/sessions
+
 ## [0.2.8] - 2026-02-28
 
 ### Added

@@ -918,6 +918,8 @@ export default function Page() {
     useState(false);
   const [isAskLibraryThreadLoading, setIsAskLibraryThreadLoading] =
     useState(false);
+  const [askLibraryThreadsError, setAskLibraryThreadsError] =
+    useState<string | null>(null);
   const [isAskingLibrary, setIsAskingLibrary] = useState(false);
   const [initialLinkDraft, setInitialLinkDraft] =
     useState<PastedLinkDraft | null>(null);
@@ -967,6 +969,16 @@ export default function Page() {
     null,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [organizationLoadError, setOrganizationLoadError] =
+    useState<string | null>(null);
+  const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(
+    null,
+  );
+  const [categoryLoadError, setCategoryLoadError] = useState<string | null>(
+    null,
+  );
+  const [workspaceCountsError, setWorkspaceCountsError] =
+    useState<string | null>(null);
   const [dataMode, setDataMode] = useState<"database" | "mock">("mock");
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -1813,6 +1825,12 @@ export default function Page() {
   const showResourceLoadError =
     Boolean(loadError) && !isResourcesLoading && resources.length === 0;
   const isResourceActionDisabled = isResourcesLoading || !activeWorkspaceId;
+  const showOrganizationsEmptyState =
+    !isOrganizationsLoading && organizations.length === 0;
+  const showWorkspacesEmptyState =
+    !isWorkspacesLoading && Boolean(activeOrganizationId) && workspaces.length === 0;
+  const showCategoriesEmptyState =
+    !isCategoriesLoading && Boolean(activeWorkspaceId) && categories.length === 0;
   const activeWorkspaceResourceTotal = activeWorkspaceId
     ? (workspaceResourceCounts[activeWorkspaceId] ?? resourcesInActiveWorkspace.length)
     : resourcesInActiveWorkspace.length;
@@ -1968,6 +1986,7 @@ export default function Page() {
     colorSchemes[currentSchemeIndex] ?? colorSchemes[0] ?? null;
 
   const fetchWorkspaceCounts = useCallback(async () => {
+    setWorkspaceCountsError(null);
     try {
       const response = await fetch("/api/workspaces/counts", {
         cache: "no-store",
@@ -1982,9 +2001,14 @@ export default function Page() {
         setDataMode(payload.mode);
       }
     } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to load workspace counts.";
+      setWorkspaceCountsError(message);
       console.error(
         "Failed to fetch workspace counts:",
-        error instanceof Error ? error.message : error,
+        message,
       );
     }
   }, []);
@@ -2010,6 +2034,10 @@ export default function Page() {
       setIsCategoriesLoading(true);
       setIsWorkspacesLoading(true);
       setLoadError(null);
+      setOrganizationLoadError(null);
+      setWorkspaceLoadError(null);
+      setCategoryLoadError(null);
+      setWorkspaceCountsError(null);
 
       try {
         const params = new URLSearchParams();
@@ -2111,6 +2139,7 @@ export default function Page() {
 
   const fetchCategories = useCallback(async () => {
     setIsCategoriesLoading(true);
+    setCategoryLoadError(null);
     try {
       const params = new URLSearchParams();
       if (activeWorkspaceId) {
@@ -2134,9 +2163,12 @@ export default function Page() {
         setDataMode(payload.mode);
       }
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load categories.";
+      setCategoryLoadError(message);
       console.error(
         "Failed to fetch categories:",
-        error instanceof Error ? error.message : error,
+        message,
       );
     } finally {
       setIsCategoriesLoading(false);
@@ -2145,6 +2177,7 @@ export default function Page() {
 
   const fetchWorkspaces = useCallback(async () => {
     setIsWorkspacesLoading(true);
+    setWorkspaceLoadError(null);
     try {
       const params = new URLSearchParams();
       if (activeOrganizationId) {
@@ -2167,9 +2200,12 @@ export default function Page() {
         setDataMode(payload.mode);
       }
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load workspaces.";
+      setWorkspaceLoadError(message);
       console.error(
         "Failed to fetch workspaces:",
-        error instanceof Error ? error.message : error,
+        message,
       );
     } finally {
       setIsWorkspacesLoading(false);
@@ -2178,6 +2214,7 @@ export default function Page() {
 
   const fetchOrganizations = useCallback(async () => {
     setIsOrganizationsLoading(true);
+    setOrganizationLoadError(null);
     try {
       const response = await fetch("/api/organizations", {
         cache: "no-store",
@@ -2193,9 +2230,12 @@ export default function Page() {
         setDataMode(payload.mode);
       }
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load organizations.";
+      setOrganizationLoadError(message);
       console.error(
         "Failed to fetch organizations:",
-        error instanceof Error ? error.message : error,
+        message,
       );
     } finally {
       setIsOrganizationsLoading(false);
@@ -5102,10 +5142,12 @@ export default function Page() {
   const fetchAskLibraryThreads = useCallback(async () => {
     if (!sessionUserId) {
       setAskLibraryThreads([]);
+      setAskLibraryThreadsError(null);
       return;
     }
 
     setIsAskLibraryThreadsLoading(true);
+    setAskLibraryThreadsError(null);
     try {
       const params = new URLSearchParams();
       if (activeWorkspaceId) {
@@ -5130,10 +5172,15 @@ export default function Page() {
         setAskLibraryThreadId(null);
       }
     } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to load Ask Library threads.";
+      setAskLibraryThreadsError(message);
       setAskLibraryThreads([]);
       console.error(
         "Failed to fetch Ask Library threads:",
-        error instanceof Error ? error.message : error,
+        message,
       );
     } finally {
       setIsAskLibraryThreadsLoading(false);
@@ -6154,6 +6201,157 @@ export default function Page() {
                 </p>
                 </div>
               )}
+              {organizationLoadError ||
+              workspaceLoadError ||
+              categoryLoadError ||
+              workspaceCountsError ||
+              showOrganizationsEmptyState ||
+              showWorkspacesEmptyState ||
+              showCategoriesEmptyState ? (
+                <div
+                  className={cn(
+                    "space-y-2",
+                    isReallyCompactMode ? "mb-2" : "mb-4",
+                  )}
+                >
+                  {organizationLoadError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+                      <p className="text-xs text-destructive">
+                        Could not load organizations: {organizationLoadError}
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void fetchOrganizations();
+                        }}
+                        disabled={isOrganizationsLoading}
+                        className="h-7 px-2 text-xs"
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  {workspaceLoadError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+                      <p className="text-xs text-destructive">
+                        Could not load workspaces: {workspaceLoadError}
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void fetchWorkspaces();
+                        }}
+                        disabled={isWorkspacesLoading}
+                        className="h-7 px-2 text-xs"
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  {categoryLoadError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+                      <p className="text-xs text-destructive">
+                        Could not load categories: {categoryLoadError}
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void fetchCategories();
+                        }}
+                        disabled={isCategoriesLoading}
+                        className="h-7 px-2 text-xs"
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  {workspaceCountsError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+                      <p className="text-xs text-amber-300">
+                        Workspace counts may be stale: {workspaceCountsError}
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void fetchWorkspaceCounts();
+                        }}
+                        className="h-7 px-2 text-xs"
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  {showOrganizationsEmptyState && !organizationLoadError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-card/70 px-3 py-2">
+                      <p className="text-xs text-muted-foreground">
+                        No organizations are available yet.
+                      </p>
+                      {canCreateOrganizations ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={handleOpenCreateOrganizationDialog}
+                          className="h-7 px-2 text-xs"
+                        >
+                          Create organization
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {showWorkspacesEmptyState && !workspaceLoadError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-card/70 px-3 py-2">
+                      <p className="text-xs text-muted-foreground">
+                        No workspaces found for this organization.
+                      </p>
+                      {canCreateWorkspaces ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={handleOpenCreateWorkspaceDialog}
+                          className="h-7 px-2 text-xs"
+                        >
+                          Create workspace
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {showCategoriesEmptyState && !categoryLoadError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-card/70 px-3 py-2">
+                      <p className="text-xs text-muted-foreground">
+                        No categories found in this workspace yet.
+                      </p>
+                      {canManageCategories ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={handleOpenCreateCategoryDialog}
+                          disabled={isCategoryMutating || !activeWorkspaceId}
+                          className="h-7 px-2 text-xs"
+                        >
+                          Create category
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {showResourceSkeleton ? (
                 isReallyCompactMode ? (
                   <div className="space-y-1">
@@ -6803,7 +7001,25 @@ export default function Page() {
                     {isAskLibraryThreadsLoading ? "Loading..." : `${askLibraryThreads.length} shown`}
                   </span>
                 </div>
-                {askLibraryThreads.length > 0 ? (
+                {askLibraryThreadsError ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+                    <p className="text-xs text-destructive">
+                      Could not load threads: {askLibraryThreadsError}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        void fetchAskLibraryThreads();
+                      }}
+                      disabled={isAskLibraryThreadsLoading}
+                      className="h-7 px-2 text-xs"
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                ) : askLibraryThreads.length > 0 ? (
                   <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
                     {askLibraryThreads.map((thread) => (
                       <Button

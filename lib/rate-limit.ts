@@ -228,7 +228,8 @@ function parseRedisReply(buffer: Buffer, startOffset = 0): ParseResult | null {
       if (
         parsed.value !== null &&
         typeof parsed.value === "object" &&
-        parsed.value.name === "RedisResponseError"
+        "name" in parsed.value &&
+        (parsed.value as { name?: string }).name === "RedisResponseError"
       ) {
         return {
           value: parsed.value,
@@ -346,9 +347,15 @@ async function executeRedisCommands(
           if (
             parsed.value !== null &&
             typeof parsed.value === "object" &&
-            parsed.value.name === "RedisResponseError"
+            !Array.isArray(parsed.value) &&
+            (parsed.value as { name?: string }).name === "RedisResponseError"
           ) {
-            fail(parsed.value);
+            // Ensure fail always receives an Error object
+            fail(
+              parsed.value instanceof Error
+                ? parsed.value
+                : new Error(String(parsed.value)),
+            );
             return;
           }
 

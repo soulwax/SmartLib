@@ -222,6 +222,8 @@ const TOKEN_AUTH_STATE_REFRESH_TTL_MS = 5 * 60 * 1000;
  */
 function isAuthStateComplete(token: JWT): boolean {
   return (
+    typeof token.userId === "string" &&
+    token.userId.length > 0 &&
     typeof token.role === "string" &&
     typeof token.isAdmin === "boolean" &&
     typeof token.isFirstAdmin === "boolean" &&
@@ -527,6 +529,15 @@ export const authOptions: NextAuthOptions = {
           token.isFirstAdmin = authUser.isFirstAdmin;
           token.email = authUser.email;
           token.username = authUser.username;
+        } else {
+          // Hard-invalidate stale sessions when backing user no longer exists.
+          token.userId = "";
+          token.sub = "";
+          token.role = "viewer";
+          token.isAdmin = false;
+          token.isFirstAdmin = false;
+          token.email = "";
+          token.username = null;
         }
 
         token.authStateRefreshedAt = now;
@@ -536,10 +547,10 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }) {
       if (session.user) {
-        if (typeof token.userId === "string") {
+        if (typeof token.userId === "string" && token.userId.length > 0) {
           session.user.id = token.userId;
-        } else if (typeof token.sub === "string") {
-          session.user.id = token.sub;
+        } else {
+          session.user.id = "";
         }
 
         session.user.username = token.username ?? null;

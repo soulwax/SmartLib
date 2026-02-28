@@ -741,3 +741,19 @@ export async function updateUserRole(
 
   return normalizeRow(updated as AuthUserRow)
 }
+
+export async function deleteUserById(userId: string): Promise<void> {
+  await ensureSchema()
+  const db = getDb()
+
+  const rows = await db
+    .delete(appUsers)
+    .where(eq(appUsers.id, userId))
+    .returning({
+      id: appUsers.id,
+    })
+
+  if (rows.length === 0) {
+    throw new UserNotFoundError(userId)
+  }
+}

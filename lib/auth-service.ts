@@ -8,6 +8,7 @@ import {
   createEmailVerificationToken as createDbEmailVerificationToken,
   createPasswordResetToken as createDbPasswordResetToken,
   createUser as createDbUser,
+  deleteUserById as deleteDbUserById,
   ensureUserByEmail as ensureDbUserByEmail,
   ensureUserByUsername as ensureDbUserByUsername,
   findUserByEmail as findDbUser,
@@ -29,6 +30,28 @@ import {
 import type { UserRole } from "@/lib/authorization"
 import { hasDatabaseEnv, getOptionalSuperAdminEnv } from "@/lib/env"
 import { hashPassword, verifyPassword } from "@/lib/password"
+import type { AskLibraryThreadSummary } from "@/lib/ask-library-thread-repository"
+import { listAskLibraryThreadsForUser } from "@/lib/ask-library-thread-repository"
+import { findAiPastePreferenceByUserId } from "@/lib/ai-paste-preference-repository"
+import { findColorSchemePreferenceByUserId } from "@/lib/color-scheme-preference-repository"
+import {
+  listResourceCategories as listDbResourceCategories,
+  listResourceOrganizations as listDbResourceOrganizations,
+  listResources as listDbResources,
+  listResourceWorkspaces as listDbResourceWorkspaces,
+} from "@/lib/resource-repository"
+import {
+  listMockResourceCategories,
+  listMockResourceOrganizations,
+  listMockResources,
+  listMockResourceWorkspaces,
+} from "@/lib/mock-resource-store"
+import type {
+  ResourceCard,
+  ResourceCategory,
+  ResourceOrganization,
+  ResourceWorkspace,
+} from "@/lib/resources"
 
 export type AuthDataMode = "database" | "mock"
 
@@ -51,6 +74,23 @@ type EnsureAuthUserForSignInOptions = {
   allowCreate?: boolean
   autoVerifyEmail?: boolean
   requireVerifiedEmail?: boolean
+}
+
+export interface AuthAccountExportPayload {
+  exportedAt: string
+  mode: AuthDataMode
+  user: AuthUserRecord
+  preferences: {
+    colorScheme: string | null
+    aiPasteDecision: "accepted" | "declined" | null
+  }
+  ownedContent: {
+    organizations: ResourceOrganization[]
+    workspaces: ResourceWorkspace[]
+    categories: ResourceCategory[]
+    resources: ResourceCard[]
+    askLibraryThreads: AskLibraryThreadSummary[]
+  }
 }
 
 export class NotFirstAdminError extends Error {
@@ -81,6 +121,13 @@ export class InvalidPasswordResetTokenError extends Error {
   }
 }
 
+export class CannotDeleteFirstAdminError extends Error {
+  constructor() {
+    super("FirstAdmin account cannot be deleted.")
+    this.name = "CannotDeleteFirstAdminError"
+  }
+}
+
 const mockUsersByEmail = new Map<string, AuthUserRecord>()
 const mockUsersByUsername = new Map<string, AuthUserRecord>()
 const mockVerificationTokensByHash = new Map<string, AuthTokenRecord>()
@@ -102,6 +149,16 @@ function cloneUserRecord(user: AuthUserRecord): AuthUserRecord {
     isFirstAdmin: user.isFirstAdmin,
     emailVerifiedAt: user.emailVerifiedAt,
   }
+}
+
+function findMockUserById(userId: string): { email: string; user: AuthUserRecord } | null {
+  for (const [email, user] of mockUsersByEmail.entries()) {
+    if (user.id === userId) {
+      return { email, user }
+    }
+  }
+
+  return null
 }
 
 function currentMode(): AuthDataMode {
@@ -718,6 +775,187 @@ export async function findAuthUserById(id: string): Promise<{
     mode,
     user: null,
   }
+}
+
+export async function exportAuthAccountData(
+  userId: string
+): Promise<AuthAccountExportPayload> {
+  const mode = currentMode()
+  await ensureSuperAdminSeeded()
+
+  const normalizedUserId = userId.trim()
+  if (!normalizedUserId) {
+    throw new UserNotFoundError(userId)
+  }
+
+  if (mode === "database") {
+    const user = await findDbUserById(normalizedUserId)
+    if (!user) {
+      throw new UserNotFoundError(normalizedUserId)
+    }
+
+    const [
+      colorSchemePreference,
+      aiPastePreference,
+      askLibraryThreads,
+      organizationsVisible,
+      workspacesVisible,
+      categoriesVisible,
+      resourcesVisible,
+    ] = await Promise.all([
+      findColorSchemePreferenceByUserId(normalizedUserId),
+      findAiPastePreferenceByUserId(normalizedUserId),
+      listAskLibraryThreadsForUser(normalizedUserId, {
+        limit: 30,
+      }),
+      listDbResourceOrganizations({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+      listDbResourceWorkspaces({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+      listDbResourceCategories({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+      listDbResources({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+    ])
+
+    return {
+      exportedAt: new Date().toISOString(),
+      mode,
+      user,
+      preferences: {
+        colorScheme: colorSchemePreference?.colorScheme ?? null,
+        aiPasteDecision: aiPastePreference?.decision ?? null,
+      },
+      ownedContent: {
+        organizations: organizationsVisible.filter(
+          (organization) => organization.ownerUserId === normalizedUserId
+        ),
+        workspaces: workspacesVisible.filter(
+          (workspace) => workspace.ownerUserId === normalizedUserId
+        ),
+        categories: categoriesVisible.filter(
+          (category) => category.ownerUserId === normalizedUserId
+        ),
+        resources: resourcesVisible.filter(
+          (resource) => resource.ownerUserId === normalizedUserId
+        ),
+        askLibraryThreads,
+      },
+    }
+  }
+
+  const found = findMockUserById(normalizedUserId)
+  if (!found) {
+    throw new UserNotFoundError(normalizedUserId)
+  }
+
+  const [organizationsVisible, workspacesVisible, categoriesVisible, resourcesVisible] =
+    await Promise.all([
+      listMockResourceOrganizations({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+      listMockResourceWorkspaces({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+      listMockResourceCategories({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+      listMockResources({
+        userId: normalizedUserId,
+        includeAllWorkspaces: true,
+      }),
+    ])
+
+  return {
+    exportedAt: new Date().toISOString(),
+    mode,
+    user: cloneUserRecord(found.user),
+    preferences: {
+      colorScheme: null,
+      aiPasteDecision: null,
+    },
+    ownedContent: {
+      organizations: organizationsVisible.filter(
+        (organization) => organization.ownerUserId === normalizedUserId
+      ),
+      workspaces: workspacesVisible.filter(
+        (workspace) => workspace.ownerUserId === normalizedUserId
+      ),
+      categories: categoriesVisible.filter(
+        (category) => category.ownerUserId === normalizedUserId
+      ),
+      resources: resourcesVisible.filter(
+        (resource) => resource.ownerUserId === normalizedUserId
+      ),
+      askLibraryThreads: [],
+    },
+  }
+}
+
+export async function deleteAuthUserAccount(
+  userId: string
+): Promise<{ mode: AuthDataMode }> {
+  const mode = currentMode()
+  await ensureSuperAdminSeeded()
+
+  const normalizedUserId = userId.trim()
+  if (!normalizedUserId) {
+    throw new UserNotFoundError(userId)
+  }
+
+  if (mode === "database") {
+    const user = await findDbUserById(normalizedUserId)
+    if (!user) {
+      throw new UserNotFoundError(normalizedUserId)
+    }
+
+    if (user.isFirstAdmin) {
+      throw new CannotDeleteFirstAdminError()
+    }
+
+    await deleteDbUserById(normalizedUserId)
+    return { mode }
+  }
+
+  const found = findMockUserById(normalizedUserId)
+  if (!found) {
+    throw new UserNotFoundError(normalizedUserId)
+  }
+
+  if (found.user.isFirstAdmin) {
+    throw new CannotDeleteFirstAdminError()
+  }
+
+  mockUsersByEmail.delete(found.email)
+
+  if (found.user.username) {
+    mockUsersByUsername.delete(normalizeIdentifier(found.user.username))
+  }
+
+  for (const [key, token] of mockVerificationTokensByHash.entries()) {
+    if (token.userId === normalizedUserId) {
+      mockVerificationTokensByHash.delete(key)
+    }
+  }
+
+  for (const [key, token] of mockPasswordResetTokensByHash.entries()) {
+    if (token.userId === normalizedUserId) {
+      mockPasswordResetTokensByHash.delete(key)
+    }
+  }
+
+  return { mode }
 }
 
 export async function registerAuthUser(

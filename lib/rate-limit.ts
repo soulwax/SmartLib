@@ -88,6 +88,11 @@ export const RATE_LIMIT_RULES = {
     max: 12,
     windowMs: 60 * 60 * 1000,
   } satisfies RateLimitRule,
+  AUTH_ACCOUNT_DELETE: {
+    namespace: "auth:account-delete",
+    max: 3,
+    windowMs: 60 * 60 * 1000,
+  } satisfies RateLimitRule,
   AUTH_ADMIN_WRITE: {
     namespace: "auth:admin-write",
     max: 30,

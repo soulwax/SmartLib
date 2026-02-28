@@ -129,6 +129,11 @@ interface RequestPasswordResetResponse extends ApiErrorResponse {
   resetPreviewUrl?: string | null;
 }
 
+interface DeleteAccountResponse extends ApiErrorResponse {
+  mode?: "database" | "mock";
+  ok?: boolean;
+}
+
 interface ListCategoriesResponse extends ApiErrorResponse {
   mode?: "database" | "mock";
   categories?: ResourceCategory[];
@@ -971,6 +976,14 @@ export default function Page() {
   const [isResendingVerification, setIsResendingVerification] = useState(false);
   const [isRequestingPasswordReset, setIsRequestingPasswordReset] =
     useState(false);
+  const [deleteAccountDialogOpen, setDeleteAccountDialogOpen] = useState(false);
+  const [deleteAccountEmailConfirm, setDeleteAccountEmailConfirm] =
+    useState("");
+  const [deleteAccountPhraseConfirm, setDeleteAccountPhraseConfirm] =
+    useState("");
+  const [hasExportedAccountData, setHasExportedAccountData] = useState(false);
+  const [isExportingAccountData, setIsExportingAccountData] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [createCategoryDialogOpen, setCreateCategoryDialogOpen] =
     useState(false);
   const [editCategoryDialogOpen, setEditCategoryDialogOpen] = useState(false);
@@ -1046,6 +1059,14 @@ export default function Page() {
   const canManageResources = isAuthenticated && canCreateResources(userRole);
   const canManageCategories = hasAdminAccess(userRole);
   const canSubmitAuth = authEmail.trim().length > 0 && authPassword.length > 0;
+  const normalizedSessionEmail = session?.user?.email?.trim().toLowerCase() ?? "";
+  const canSubmitDeleteAccount =
+    isAuthenticated &&
+    normalizedSessionEmail.length > 0 &&
+    hasExportedAccountData &&
+    !isDeletingAccount &&
+    deleteAccountEmailConfirm.trim().toLowerCase() === normalizedSessionEmail &&
+    deleteAccountPhraseConfirm.trim() === "DELETE MY ACCOUNT";
   const canSubmitOrganization =
     canCreateOrganizations &&
     newOrganizationName.trim().length > 0 &&
@@ -1141,6 +1162,12 @@ export default function Page() {
     if (isRequestingPasswordReset) {
       return "Preparing password reset email...";
     }
+    if (isExportingAccountData) {
+      return "Exporting account data...";
+    }
+    if (isDeletingAccount) {
+      return "Deleting account...";
+    }
     if (isAiPastePreferenceSaving) {
       return "Saving AI paste preference...";
     }
@@ -1166,6 +1193,8 @@ export default function Page() {
     isLoadingMoreResources,
     isPasteFlowInProgress,
     isRefreshingLibrary,
+    isExportingAccountData,
+    isDeletingAccount,
     isRequestingPasswordReset,
     isResendingVerification,
     isSaving,
@@ -2988,6 +3017,118 @@ export default function Page() {
       setIsRequestingPasswordReset(false);
     }
   }, [authEmail, isRequestingPasswordReset]);
+
+  const resetDeleteAccountDialogState = useCallback(() => {
+    setDeleteAccountEmailConfirm("");
+    setDeleteAccountPhraseConfirm("");
+    setHasExportedAccountData(false);
+    setIsExportingAccountData(false);
+    setIsDeletingAccount(false);
+  }, []);
+
+  const handleExportAccountData = useCallback(async () => {
+    if (!isAuthenticated || isExportingAccountData) {
+      return;
+    }
+
+    setIsExportingAccountData(true);
+
+    try {
+      const response = await fetch("/api/account/export", {
+        method: "GET",
+      });
+
+      if (!response.ok) {
+        const payload = await readJson<ApiErrorResponse>(response);
+        throw new Error(payload?.error ?? "Failed to export account data.");
+      }
+
+      const blob = await response.blob();
+      const fallbackFilename = `bluesix-account-export-${new Date()
+        .toISOString()
+        .slice(0, 10)}.json`;
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const filenameMatch =
+        /filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i.exec(
+          disposition,
+        );
+      const rawFilename = filenameMatch?.[1] ?? filenameMatch?.[2] ?? null;
+      const filename = rawFilename
+        ? decodeURIComponent(rawFilename)
+        : fallbackFilename;
+
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(objectUrl);
+
+      setHasExportedAccountData(true);
+      toast.success("Account data exported", {
+        description: "Download complete. Continue with deletion confirmation.",
+      });
+    } catch (error) {
+      toast.error("Export failed", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not export account data.",
+      });
+    } finally {
+      setIsExportingAccountData(false);
+    }
+  }, [isAuthenticated, isExportingAccountData]);
+
+  const handleDeleteAccount = useCallback(async () => {
+    if (!canSubmitDeleteAccount || isDeletingAccount) {
+      return;
+    }
+
+    setIsDeletingAccount(true);
+
+    try {
+      const response = await fetch("/api/account/delete", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: deleteAccountEmailConfirm.trim(),
+          confirmation: deleteAccountPhraseConfirm.trim(),
+          exportConfirmed: hasExportedAccountData,
+        }),
+      });
+      const payload = await readJson<DeleteAccountResponse>(response);
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.error ?? "Failed to delete account.");
+      }
+
+      toast.success("Account deleted", {
+        description: "Signing you out.",
+      });
+      setDeleteAccountDialogOpen(false);
+      resetDeleteAccountDialogState();
+      await signOut({ callbackUrl: "/" });
+    } catch (error) {
+      toast.error("Account deletion failed", {
+        description:
+          error instanceof Error ? error.message : "Could not delete account.",
+      });
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  }, [
+    canSubmitDeleteAccount,
+    deleteAccountEmailConfirm,
+    deleteAccountPhraseConfirm,
+    hasExportedAccountData,
+    isDeletingAccount,
+    resetDeleteAccountDialogState,
+  ]);
 
   const handleCreateOrganization = useCallback(async () => {
     if (!canSubmitOrganization) {
@@ -7021,9 +7162,22 @@ export default function Page() {
                       size="sm"
                       className="mt-3 w-full text-xs"
                       onClick={() => void signOut()}
+                      disabled={isDeletingAccount || isExportingAccountData}
                     >
                       <LogOut className="mr-2 h-3.5 w-3.5" />
                       Log out
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 w-full border-destructive/40 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => {
+                        resetDeleteAccountDialogState();
+                        setDeleteAccountDialogOpen(true);
+                      }}
+                      disabled={isDeletingAccount || isExportingAccountData}
+                    >
+                      Delete account
                     </Button>
                   </>
                 ) : (
@@ -7155,6 +7309,102 @@ export default function Page() {
                   {activeColorScheme?.description}
                 </p>
               </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteAccountDialogOpen}
+        onOpenChange={(open) => {
+          if (isDeletingAccount) {
+            return;
+          }
+
+          setDeleteAccountDialogOpen(open);
+          if (!open) {
+            resetDeleteAccountDialogState();
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Account</DialogTitle>
+            <DialogDescription>
+              This permanently removes your login access. Owned content is
+              disowned, and user-linked preferences/threads are removed.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-md border border-border/70 bg-card/50 p-3">
+              <p className="text-xs font-medium text-foreground">
+                Step 1: Export your data
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Download your account export before deleting. This is required.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3 w-full"
+                onClick={() => void handleExportAccountData()}
+                disabled={isExportingAccountData || isDeletingAccount}
+              >
+                {isExportingAccountData ? "Exporting..." : "Export account data"}
+              </Button>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Status: {hasExportedAccountData ? "Export complete" : "Not exported"}
+              </p>
+            </div>
+
+            <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+              <p className="text-xs font-medium text-foreground">
+                Step 2: Confirm deletion
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                Enter your account email and type{" "}
+                <span className="font-semibold text-foreground">
+                  DELETE MY ACCOUNT
+                </span>{" "}
+                to continue.
+              </p>
+              <Input
+                value={deleteAccountEmailConfirm}
+                onChange={(event) => setDeleteAccountEmailConfirm(event.target.value)}
+                placeholder={session?.user?.email ?? "you@example.com"}
+                disabled={isDeletingAccount}
+                aria-label="Confirm account email for deletion"
+              />
+              <Input
+                value={deleteAccountPhraseConfirm}
+                onChange={(event) =>
+                  setDeleteAccountPhraseConfirm(event.target.value)
+                }
+                placeholder="DELETE MY ACCOUNT"
+                disabled={isDeletingAccount}
+                aria-label="Confirm delete phrase"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setDeleteAccountDialogOpen(false)}
+                disabled={isDeletingAccount}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void handleDeleteAccount()}
+                disabled={!canSubmitDeleteAccount}
+              >
+                {isDeletingAccount ? "Deleting..." : "Delete account"}
+              </Button>
             </div>
           </div>
         </DialogContent>

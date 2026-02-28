@@ -18,9 +18,9 @@ Goal: ship a stable, secure, presentable public MVP of BlueSix for real users.
 - [x] Add endpoint-level rate limiting (auth, AI, write APIs) with Redis-first limiter and in-memory fallback (completed 2026-02-28)
 - [x] Enforce production-safe session/auth configuration and rotation rules (completed 2026-02-28)
 - [x] Add password reset flow and account recovery UX (completed 2026-02-28; `/api/auth/request-password-reset`, `/api/auth/reset-password`, `/reset-password`)
-- [ ] Add account deletion with data export confirmation
+- [x] Add account deletion with data export confirmation (completed 2026-02-28; `/api/account/export`, `/api/account/delete`, Preferences > Account)
 - [x] Publish Privacy Policy and Terms of Service (completed 2026-02-28; `/privacy`, `/terms`)
-- [ ] Run a focused security review of auth, permissions, and input validation
+- [x] Run a focused security review of auth, permissions, and input validation (completed 2026-02-28; `docs/security-review-auth-permissions-input-validation-2026-02-28.md`)
 
 ### Product Reliability
 

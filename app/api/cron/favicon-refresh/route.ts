@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto"
+
 import { NextResponse } from "next/server"
 
 import { ensureSchema } from "@/lib/db"
@@ -23,7 +25,15 @@ function isAuthorized(request: Request): boolean {
   }
 
   const auth = request.headers.get("authorization") ?? ""
-  return auth === `Bearer ${cronSecret}`
+  const expected = `Bearer ${cronSecret}`
+  const receivedBuffer = Buffer.from(auth)
+  const expectedBuffer = Buffer.from(expected)
+
+  if (receivedBuffer.length !== expectedBuffer.length) {
+    return false
+  }
+
+  return timingSafeEqual(receivedBuffer, expectedBuffer)
 }
 
 export async function GET(request: Request) {

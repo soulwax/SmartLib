@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - New role-boundary verification matrix and automated guard checker (`docs/role-boundary-verification-matrix.md`, `scripts/verify-role-boundaries.mjs`, `pnpm verify:role-boundaries`)
 - New logical backup/restore tooling with backup drill and verification commands (`scripts/db-backup-restore.mjs`, `pnpm db:backup*`, `pnpm db:restore`)
 - New backup/restore runbook documenting operational drill and restore steps (`docs/backup-restore-runbook.md`)
+- New backup/restore drill report including successful disposable-target restore validation (`docs/backup-restore-drill-2026-02-28.md`)
 
 ### Changed
 
@@ -18,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added shared API error utilities (`lib/api-error.ts`) and migrated route-level validation/error branches to consistent status-code + error-code responses
 - Normalized rate-limit responses to include a stable `RATE_LIMITED` error code while preserving existing retry headers
 - Added `backups/` to `.gitignore` to prevent accidental snapshot commits
+- Documented and executed full restore drill on a disposable Neon target (with post-restore row-count parity checks)
 
 ## [0.2.10] - 2026-02-28
 

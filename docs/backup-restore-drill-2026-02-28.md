@@ -9,6 +9,8 @@ Command: `pnpm db:backup:drill`
 - Status: Passed
 - Backup artifact created: `backups/db-backup-20260228T114959Z.json`
 - Integrity verification: Passed
+- Disposable-target restore execution: Passed
+- Target environment: Neon branch `ep-wispy-cherry-agxgbz22` (pooler + unpooled URLs)
 
 ## Row Count Snapshot
 
@@ -28,7 +30,13 @@ Command: `pnpm db:backup:drill`
 - `public.resource_audit_logs`: 2
 - `public.favicon_cache`: 160
 
+## Restore Execution
+
+1. Schema bootstrap on disposable target was run with `drizzle-kit push --force` (target DB env override).
+2. Full restore was run with `pnpm db:restore -- --input backups/db-backup-20260228T114959Z.json --confirm RESTORE_DATA`.
+3. Post-restore validation compared live row counts for all backed-up tables against backup `summary`; all tables matched exactly.
+
 ## Notes
 
-- This drill validates logical backup generation and FK-style integrity checks.
-- A full destructive restore should still be executed against a disposable target DB before checking off the launch gate item.
+- This drill validates logical backup generation, FK-style integrity checks, and full destructive restore on a disposable target DB.
+- `drizzle-kit migrate` on a blank target currently encounters legacy migration ordering drift; for disposable restore targets we used schema bootstrap via `drizzle-kit push --force` before restore.

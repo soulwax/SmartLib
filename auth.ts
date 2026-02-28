@@ -31,6 +31,130 @@ const credentialsSchema = z.object({
   password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
 });
 export const GITHUB_FALLBACK_EMAIL_DOMAIN = "github.local";
+const DEFAULT_AUTH_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_AUTH_SESSION_UPDATE_AGE_SECONDS = 12 * 60 * 60;
+const MIN_AUTH_SESSION_MAX_AGE_SECONDS = 15 * 60;
+const MAX_AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const MIN_AUTH_SESSION_UPDATE_AGE_SECONDS = 5 * 60;
+
+function isProductionEnv(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+function parsePositiveIntegerEnv(
+  key: string,
+  defaultValue: number,
+  options?: {
+    minimum?: number;
+    maximum?: number;
+  },
+): number {
+  const rawValue = process.env[key]?.trim();
+  if (!rawValue) {
+    return defaultValue;
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[auth] Ignoring invalid ${key} value "${rawValue}". Falling back to ${defaultValue}.`,
+    );
+    return defaultValue;
+  }
+
+  if (typeof options?.minimum === "number" && parsed < options.minimum) {
+    console.warn(
+      `[auth] ${key} value ${parsed} is below minimum ${options.minimum}. Falling back to ${defaultValue}.`,
+    );
+    return defaultValue;
+  }
+
+  if (typeof options?.maximum === "number" && parsed > options.maximum) {
+    console.warn(
+      `[auth] ${key} value ${parsed} exceeds maximum ${options.maximum}. Falling back to ${defaultValue}.`,
+    );
+    return defaultValue;
+  }
+
+  return parsed;
+}
+
+function getSessionLifetimeConfig(): { maxAgeSeconds: number; updateAgeSeconds: number } {
+  const maxAgeSeconds = parsePositiveIntegerEnv(
+    "AUTH_SESSION_MAX_AGE_SECONDS",
+    DEFAULT_AUTH_SESSION_MAX_AGE_SECONDS,
+    {
+      minimum: MIN_AUTH_SESSION_MAX_AGE_SECONDS,
+      maximum: MAX_AUTH_SESSION_MAX_AGE_SECONDS,
+    },
+  );
+
+  const desiredUpdateAgeSeconds = parsePositiveIntegerEnv(
+    "AUTH_SESSION_UPDATE_AGE_SECONDS",
+    DEFAULT_AUTH_SESSION_UPDATE_AGE_SECONDS,
+    { minimum: MIN_AUTH_SESSION_UPDATE_AGE_SECONDS },
+  );
+  const maxAllowedUpdateAgeSeconds = Math.max(
+    MIN_AUTH_SESSION_UPDATE_AGE_SECONDS,
+    maxAgeSeconds - 60,
+  );
+  const updateAgeSeconds = Math.min(
+    desiredUpdateAgeSeconds,
+    maxAllowedUpdateAgeSeconds,
+  );
+
+  if (updateAgeSeconds !== desiredUpdateAgeSeconds) {
+    console.warn(
+      `[auth] AUTH_SESSION_UPDATE_AGE_SECONDS reduced to ${updateAgeSeconds} so it stays below session max age.`,
+    );
+  }
+
+  return { maxAgeSeconds, updateAgeSeconds };
+}
+
+function validateAuthBaseUrl(): void {
+  const nextAuthUrl = process.env.NEXTAUTH_URL?.trim();
+  if (!nextAuthUrl) {
+    if (isProductionEnv()) {
+      throw new Error(
+        "NEXTAUTH_URL must be set in production and should use https://.",
+      );
+    }
+    return;
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(nextAuthUrl);
+  } catch {
+    throw new Error(
+      `NEXTAUTH_URL is invalid: "${nextAuthUrl}". Use a full URL like https://example.com.`,
+    );
+  }
+
+  if (isProductionEnv() && parsedUrl.protocol !== "https:") {
+    throw new Error(
+      `NEXTAUTH_URL must use https:// in production (received "${nextAuthUrl}").`,
+    );
+  }
+}
+
+function validateAuthSecretStrength(secret: string): void {
+  const minimumLength = 32;
+  if (secret.length >= minimumLength) {
+    return;
+  }
+
+  const message =
+    `Auth secret is too short (${secret.length}). ` +
+    `Use at least ${minimumLength} characters (openssl rand -base64 32).`;
+
+  if (isProductionEnv()) {
+    throw new Error(message);
+  }
+
+  console.warn(`[auth] WARNING: ${message}`);
+}
 
 /**
  * Constructs a fallback email address for GitHub OAuth users when email is not available.
@@ -60,7 +184,7 @@ function getAuthSecret(): string {
   }
 
   // Only allow fallback in development mode
-  const isDevelopment = process.env.NODE_ENV !== "production";
+  const isDevelopment = !isProductionEnv();
 
   if (!isDevelopment) {
     throw new Error(
@@ -77,7 +201,10 @@ function getAuthSecret(): string {
   return "dev-only-insecure-secret-change-in-production";
 }
 
+validateAuthBaseUrl();
 const authSecret = getAuthSecret();
+validateAuthSecretStrength(authSecret);
+const sessionLifetime = getSessionLifetimeConfig();
 const githubClientId = process.env.GITHUB_CLIENT_ID?.trim();
 const githubClientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
 
@@ -107,6 +234,11 @@ export const authOptions: NextAuthOptions = {
   secret: authSecret,
   session: {
     strategy: "jwt",
+    maxAge: sessionLifetime.maxAgeSeconds,
+    updateAge: sessionLifetime.updateAgeSeconds,
+  },
+  jwt: {
+    maxAge: sessionLifetime.maxAgeSeconds,
   },
   providers: [
     ...(githubClientId && githubClientSecret

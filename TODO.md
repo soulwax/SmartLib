@@ -16,7 +16,7 @@ Goal: ship a stable, secure, presentable public MVP of BlueSix for real users.
 
 - [x] Roll out CSRF protection to all state-changing API routes (completed 2026-02-28)
 - [x] Add endpoint-level rate limiting (auth, AI, write APIs) with Redis-first limiter and in-memory fallback (completed 2026-02-28)
-- [ ] Enforce production-safe session/auth configuration and rotation rules
+- [x] Enforce production-safe session/auth configuration and rotation rules (completed 2026-02-28)
 - [ ] Add password reset flow and account recovery UX
 - [ ] Add account deletion with data export confirmation
 - [ ] Publish Privacy Policy and Terms of Service
@@ -29,7 +29,7 @@ Goal: ship a stable, secure, presentable public MVP of BlueSix for real users.
 - [ ] Complete loading/empty/error UI states for all async flows
 - [ ] Verify role boundaries (viewer/editor/admin/first_admin) end-to-end
 - [ ] Add backup and restore procedure (documented and test-run)
-- [ ] Add smoke test checklist for production release verification
+- [x] Add smoke test checklist for production release verification (completed 2026-02-28; `docs/production-smoke-test-checklist.md`)
 
 ### UX & Presentation
 
@@ -42,9 +42,9 @@ Goal: ship a stable, secure, presentable public MVP of BlueSix for real users.
 ### Ops & Delivery
 
 - [ ] Add error monitoring (Sentry or equivalent) and alert routing
-- [ ] Add uptime/health checks and basic incident playbook
+- [x] Add uptime/health checks and basic incident playbook (completed 2026-02-28; `/api/health/live`, `/api/health/ready`, `docs/incident-playbook.md`)
 - [ ] Establish staging environment parity with production config
-- [ ] Add CI checks for typecheck/build/test before deploy
+- [x] Add CI checks for typecheck/build/test before deploy (completed 2026-02-28; `.github/workflows/ci.yml`)
 
 ## P1: Should Complete Soon After Launch
 

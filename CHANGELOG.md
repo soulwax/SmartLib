@@ -6,11 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- New health endpoints: `GET /api/health/live` (liveness) and `GET /api/health/ready` (readiness with database + rate-limit backend component checks)
+- Production incident response playbook at `docs/incident-playbook.md`
+- Production release smoke checklist at `docs/production-smoke-test-checklist.md`
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`) enforcing typecheck/build and running tests when present
+
 ### Changed
 
 - Credentials sign-in now resolves accounts by either email or username, matching the login UI label
 - GitHub private-email fallback addresses now include the GitHub user id (`username+github-<id>@github.local`) to reduce collision risk
 - Applied endpoint-level rate limiting across auth mutations, AI endpoints, and state-changing write routes with structured `429` responses and retry headers
+- Auth session/JWT lifetimes are now explicitly configured with safe defaults and env overrides (`AUTH_SESSION_MAX_AGE_SECONDS`, `AUTH_SESSION_UPDATE_AGE_SECONDS`)
 
 ### Fixed
 
@@ -22,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Added a Redis-backed rate limiting module with per-rule windows, IP/user subject keys, and automatic in-memory fallback when Redis is unavailable
 - Credentials login attempts are now throttled per identifier to reduce brute-force risk
+- Enforced stricter production auth configuration requirements for `NEXTAUTH_URL` (https) and secret strength validation
 
 ## [0.2.9] - 2026-02-28
 

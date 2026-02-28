@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Hardened GitHub account-linking flow to avoid linking by reserved fallback-domain emails
 - Registration now rejects reserved `@github.local` addresses so local credentials cannot claim provider-only fallback identifiers
+- CSRF origin validation is now enforced across all state-changing API routes (`POST`, `PUT`, `PATCH`, `DELETE`)
 
 ## [0.2.9] - 2026-02-28
 

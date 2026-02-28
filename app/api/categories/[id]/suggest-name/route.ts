@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
   MissingPerplexityApiKeyError,
   suggestShortCategoryNameFromLinks,
@@ -26,8 +27,10 @@ async function parseCategoryId(context: RouteContext) {
   return z.string().uuid().parse(params.id)
 }
 
-export async function POST(_request: Request, context: RouteContext) {
+export async function POST(request: Request, context: RouteContext) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
@@ -87,6 +90,10 @@ export async function POST(_request: Request, context: RouteContext) {
       analyzedLinks: categoryLinks.length,
     })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {

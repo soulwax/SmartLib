@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
   ResourceWorkspaceAlreadyExistsError,
   ResourceWorkspaceNotFoundError,
@@ -32,6 +33,8 @@ const renameSchema = z.object({
 
 export async function PATCH(request: Request, context: RouteContext) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
@@ -49,6 +52,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return NextResponse.json({ mode, workspace })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Invalid payload.", details: error.flatten() }, { status: 400 })
     }
@@ -62,8 +69,10 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
@@ -74,6 +83,10 @@ export async function DELETE(_request: Request, context: RouteContext) {
 
     return NextResponse.json({ mode, ok: true })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof ResourceWorkspaceNotFoundError) {
       return errorResponse(error.message, 404)
     }

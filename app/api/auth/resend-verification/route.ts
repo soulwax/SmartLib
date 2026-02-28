@@ -5,6 +5,7 @@ import {
   resendAuthVerificationEmail,
   UserNotFoundError,
 } from "@/lib/auth-service"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 
 export const runtime = "nodejs"
 
@@ -32,6 +33,8 @@ async function readRequestJson(request: Request): Promise<unknown> {
 
 export async function POST(request: Request) {
   try {
+    validateCSRF(request)
+
     const payload = await readRequestJson(request)
     const input = resendSchema.parse(payload)
     const { mode, delivered, alreadyVerified } = await resendAuthVerificationEmail(
@@ -46,6 +49,10 @@ export async function POST(request: Request) {
       ok: true,
     })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {

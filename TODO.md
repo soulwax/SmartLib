@@ -14,7 +14,7 @@ Goal: ship a stable, secure, presentable public MVP of BlueSix for real users.
 
 ### Security & Trust
 
-- [ ] Roll out CSRF protection to all state-changing API routes
+- [x] Roll out CSRF protection to all state-changing API routes (completed 2026-02-28)
 - [ ] Add endpoint-level rate limiting (auth, AI, write APIs)
 - [ ] Enforce production-safe session/auth configuration and rotation rules
 - [ ] Add password reset flow and account recovery UX

@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { auth } from "@/auth"
 import { canCreateResources, deriveUserRole } from "@/lib/authorization"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import { detectLinkDuplicates } from "@/lib/link-duplicate-detection"
 import {
   MissingPerplexityApiKeyError,
@@ -71,6 +72,8 @@ async function readRequestJson(request: Request): Promise<unknown> {
 
 export async function POST(request: Request) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
@@ -182,6 +185,10 @@ export async function POST(request: Request) {
       aiApplied: items.filter((item) => item.usedAi).length,
     })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {

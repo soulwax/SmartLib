@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { auth } from "@/auth"
 import { appendAskLibraryThreadInteraction } from "@/lib/ask-library-thread-repository"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import { hasDatabaseEnv } from "@/lib/env"
 import { askLibraryQuestion } from "@/lib/library-ask"
 import { listResourcesService } from "@/lib/resource-service"
@@ -48,6 +49,8 @@ async function readRequestJson(request: Request): Promise<unknown> {
 
 export async function POST(request: Request) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     const payload = await readRequestJson(request)
     const input = requestSchema.parse(payload)
@@ -137,6 +140,10 @@ export async function POST(request: Request) {
       threadTitle,
     })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {

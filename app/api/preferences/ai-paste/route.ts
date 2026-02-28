@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { auth } from "@/auth"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
   findAiPastePreferenceByUserId,
   upsertAiPastePreferenceForUser,
@@ -47,6 +48,8 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
@@ -62,6 +65,10 @@ export async function PUT(request: Request) {
 
     return NextResponse.json({ ok: true, decision: preference.decision })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {

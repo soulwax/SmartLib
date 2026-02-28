@@ -5,6 +5,7 @@ import { cookies } from "next/headers"
 import { z } from "zod"
 
 import { auth } from "@/auth"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
   findColorSchemePreferenceByUserId,
   findColorSchemePreferenceByVisitorId,
@@ -123,6 +124,8 @@ async function readRequestJson(request: Request): Promise<unknown> {
 
 export async function PUT(request: Request) {
   try {
+    validateCSRF(request)
+
     const payload = await readRequestJson(request)
     const input = updateSchema.parse(payload)
     const colorSchemeId = readColorSchemeId(input.colorSchemeId)
@@ -158,6 +161,10 @@ export async function PUT(request: Request) {
 
     return response
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {

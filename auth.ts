@@ -25,7 +25,22 @@ const credentialsSchema = z.object({
   email: z.string().trim().min(1).max(320),
   password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
 });
-const GITHUB_FALLBACK_EMAIL_DOMAIN = "github.local";
+export const GITHUB_FALLBACK_EMAIL_DOMAIN = "github.local";
+
+/**
+ * Constructs a fallback email address for GitHub OAuth users when email is not available.
+ * Ensures consistent email construction across the codebase.
+ */
+function constructGitHubFallbackEmail(
+  username: string,
+  githubId: string | unknown,
+): string {
+  const normalizedId =
+    typeof githubId === "string" && githubId.trim().length > 0
+      ? githubId
+      : "unknown";
+  return `${username.toLowerCase().trim()}+github-${normalizedId}@${GITHUB_FALLBACK_EMAIL_DOMAIN}`;
+}
 
 /**
  * Get NextAuth secret with proper security checks.
@@ -45,13 +60,13 @@ function getAuthSecret(): string {
   if (!isDevelopment) {
     throw new Error(
       "NEXTAUTH_SECRET or AUTH_SECRET environment variable must be set in production. " +
-      "Generate a secure secret with: openssl rand -base64 32"
+        "Generate a secure secret with: openssl rand -base64 32",
     );
   }
 
   console.warn(
     "[auth] WARNING: Using insecure development secret. " +
-    "Set NEXTAUTH_SECRET in production. Generate with: openssl rand -base64 32"
+      "Set NEXTAUTH_SECRET in production. Generate with: openssl rand -base64 32",
   );
 
   return "dev-only-insecure-secret-change-in-production";
@@ -102,12 +117,15 @@ export const authOptions: NextAuthOptions = {
                 login: profile.login,
               });
 
+              const fallbackEmail = constructGitHubFallbackEmail(
+                profile.login,
+                profile.id,
+              );
+
               return {
                 id: profile.id.toString(),
                 name: profile.name ?? profile.login,
-                email:
-                  profile.email ||
-                  `${profile.login}+github-${profile.id}@${GITHUB_FALLBACK_EMAIL_DOMAIN}`, // Fallback if email private
+                email: profile.email || fallbackEmail, // Fallback if email private
                 username: profile.login, // Capture GitHub username
                 image: profile.avatar_url,
               };
@@ -155,8 +173,7 @@ export const authOptions: NextAuthOptions = {
 
         const { user: userByEmail } = await findAuthUserByEmail(identifier);
         const credentialUser =
-          userByEmail ??
-          (await findAuthUserByUsername(identifier)).user;
+          userByEmail ?? (await findAuthUserByUsername(identifier)).user;
         if (!credentialUser?.passwordHash) {
           return null;
         }
@@ -213,18 +230,15 @@ export const authOptions: NextAuthOptions = {
         if (isGitHubSignIn && user.username) {
           // GitHub OAuth: use username as primary identifier
           const username = user.username.trim().toLowerCase();
-          const fallbackEmail = `${username}+github-${
-            typeof user.id === "string" && user.id.trim().length > 0
-              ? user.id
-              : "unknown"
-          }@${GITHUB_FALLBACK_EMAIL_DOMAIN}`;
+          const fallbackEmail = constructGitHubFallbackEmail(username, user.id);
           const email = user.email?.trim().toLowerCase() || fallbackEmail;
           const canLinkByEmail = !email.endsWith(
             `@${GITHUB_FALLBACK_EMAIL_DOMAIN}`,
           );
 
           // Check if user exists by username first
-          const { user: existingByUsername } = await findAuthUserByUsername(username);
+          const { user: existingByUsername } =
+            await findAuthUserByUsername(username);
 
           if (existingByUsername) {
             // User already exists with this username
@@ -236,7 +250,8 @@ export const authOptions: NextAuthOptions = {
             if (existingByEmail && canLinkByEmail) {
               if (!existingByEmail.username) {
                 // Found existing account by email without username - link it
-                const { updateAuthUserUsername } = await import("@/lib/auth-service");
+                const { updateAuthUserUsername } =
+                  await import("@/lib/auth-service");
                 const { user: updatedUser } = await updateAuthUserUsername(
                   existingByEmail.id,
                   username,
@@ -271,11 +286,14 @@ export const authOptions: NextAuthOptions = {
             return false;
           }
 
-          const { user: emailUser } = await ensureAuthUserForSignIn(identifier, {
-            allowCreate: !isCredentialsSignIn,
-            autoVerifyEmail: false,
-            requireVerifiedEmail: isCredentialsSignIn,
-          });
+          const { user: emailUser } = await ensureAuthUserForSignIn(
+            identifier,
+            {
+              allowCreate: !isCredentialsSignIn,
+              autoVerifyEmail: false,
+              requireVerifiedEmail: isCredentialsSignIn,
+            },
+          );
           syncedUser = emailUser;
         }
 

@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { auth } from "@/auth"
 import { canCreateResources, deriveUserRole } from "@/lib/authorization"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
   ResourceNotFoundError,
   ResourceWorkspaceNotFoundError,
@@ -21,6 +22,10 @@ function errorResponse(message: string, status: number) {
 }
 
 function handleRouteError(error: unknown) {
+  if (error instanceof CSRFValidationError) {
+    return errorResponse("Invalid request origin.", 403)
+  }
+
   if (error instanceof z.ZodError) {
     return NextResponse.json(
       {
@@ -111,6 +116,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)

@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { auth } from "@/auth"
 import { deriveUserRole, hasAdminAccess } from "@/lib/authorization"
+import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import { ResourceOrganizationAlreadyExistsError } from "@/lib/resource-repository"
 import {
   createResourceOrganizationService,
@@ -35,6 +36,8 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    validateCSRF(request)
+
     const session = await auth()
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
@@ -55,6 +58,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ mode, organization }, { status: 201 })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         {

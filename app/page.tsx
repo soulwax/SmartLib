@@ -78,7 +78,6 @@ import { PaletteDropdown } from "@/components/palette-dropdown";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  BookOpen,
   ChevronDown,
   ClipboardPaste,
   FilterX,
@@ -371,6 +370,12 @@ interface GeneralSettingsPreferences {
   aiFeaturesEnabled: boolean;
 }
 
+interface PersistedLibraryLocation {
+  organizationId: string | null;
+  workspaceId: string | null;
+  scrollOffsetsBySelection: Record<string, number>;
+}
+
 async function readJson<T>(response: Response): Promise<T | null> {
   try {
     return (await response.json()) as T;
@@ -382,6 +387,7 @@ async function readJson<T>(response: Response): Promise<T | null> {
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar-width";
 const ACTIVE_ORGANIZATION_STORAGE_KEY = "active-organization-id";
 const ACTIVE_WORKSPACE_STORAGE_KEY = "active-workspace-id";
+const LIBRARY_LOCATION_STORAGE_KEY = "library-location-v1";
 const MOBILE_STACK_BREAKPOINT = 768;
 const SIDEBAR_SNAP_GRID = 8;
 const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 304;
@@ -753,6 +759,71 @@ function parseGeneralSettingsPreferences(
   }
 }
 
+function normalizePersistedId(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function buildLibrarySelectionStorageKey(
+  organizationId: string | null,
+  workspaceId: string | null,
+): string {
+  return [
+    organizationId ?? "__all_organizations__",
+    workspaceId ?? "__all_workspaces__",
+  ].join("::");
+}
+
+function parsePersistedLibraryLocation(
+  rawValue: string | null,
+): PersistedLibraryLocation | null {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as {
+      organizationId?: unknown;
+      workspaceId?: unknown;
+      scrollOffsetsBySelection?: unknown;
+    };
+
+    const scrollOffsetsBySelection: Record<string, number> = {};
+    if (
+      parsed.scrollOffsetsBySelection &&
+      typeof parsed.scrollOffsetsBySelection === "object"
+    ) {
+      for (const [selectionKey, rawOffset] of Object.entries(
+        parsed.scrollOffsetsBySelection as Record<string, unknown>,
+      )) {
+        if (!selectionKey) {
+          continue;
+        }
+
+        const numericOffset =
+          typeof rawOffset === "number" ? rawOffset : Number(rawOffset);
+        if (!Number.isFinite(numericOffset) || numericOffset < 0) {
+          continue;
+        }
+
+        scrollOffsetsBySelection[selectionKey] = Math.floor(numericOffset);
+      }
+    }
+
+    return {
+      organizationId: normalizePersistedId(parsed.organizationId),
+      workspaceId: normalizePersistedId(parsed.workspaceId),
+      scrollOffsetsBySelection,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseCompactQueryValue(rawValue: string | null): boolean | null {
   if (!rawValue) {
     return null;
@@ -926,6 +997,13 @@ export default function Page() {
   const [isReallyCompactMode, setIsReallyCompactMode] = useState(false);
   const [hasHydratedCompactMode, setHasHydratedCompactMode] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const resourceScrollContainerRef = useRef<HTMLElement | null>(null);
+  const scrollOffsetsBySelectionRef = useRef<Record<string, number>>({});
+  const pendingScrollRestoreSelectionKeyRef = useRef<string | null>(null);
+  const hasSeenResourcesLoadingForScrollRestoreRef = useRef(false);
+  const scrollPersistRafRef = useRef<number | null>(null);
+  const scrollRestoreRafRef = useRef<number | null>(null);
+  const isApplyingScrollRestoreRef = useRef(false);
   const {
     schemes: colorSchemes,
     currentSchemeIndex,
@@ -1965,6 +2043,31 @@ export default function Page() {
     [],
   );
 
+  const persistLibraryLocation = useCallback(
+    (
+      selection: { organizationId: string | null; workspaceId: string | null } = {
+        organizationId: activeOrganizationId,
+        workspaceId: activeWorkspaceId,
+      },
+    ) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      const nextValue: PersistedLibraryLocation = {
+        organizationId: selection.organizationId,
+        workspaceId: selection.workspaceId,
+        scrollOffsetsBySelection: scrollOffsetsBySelectionRef.current,
+      };
+
+      window.localStorage.setItem(
+        LIBRARY_LOCATION_STORAGE_KEY,
+        JSON.stringify(nextValue),
+      );
+    },
+    [activeOrganizationId, activeWorkspaceId],
+  );
+
   const fetchCategories = useCallback(async () => {
     setIsCategoriesLoading(true);
     try {
@@ -2080,16 +2183,28 @@ export default function Page() {
       return;
     }
 
-    const savedOrganizationId = window.localStorage.getItem(
-      ACTIVE_ORGANIZATION_STORAGE_KEY,
+    const persistedLocation = parsePersistedLibraryLocation(
+      window.localStorage.getItem(LIBRARY_LOCATION_STORAGE_KEY),
     );
+    if (persistedLocation) {
+      scrollOffsetsBySelectionRef.current =
+        persistedLocation.scrollOffsetsBySelection;
+    }
+
+    const savedOrganizationId =
+      persistedLocation?.organizationId ??
+      normalizePersistedId(
+        window.localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY),
+      );
     if (savedOrganizationId) {
       setActiveOrganizationId(savedOrganizationId);
     }
 
-    const savedWorkspaceId = window.localStorage.getItem(
-      ACTIVE_WORKSPACE_STORAGE_KEY,
-    );
+    const savedWorkspaceId =
+      persistedLocation?.workspaceId ??
+      normalizePersistedId(
+        window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY),
+      );
     if (savedWorkspaceId) {
       setActiveWorkspaceId(savedWorkspaceId);
     }
@@ -2154,6 +2269,17 @@ export default function Page() {
       activeWorkspaceId,
     );
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    persistLibraryLocation({
+      organizationId: activeOrganizationId,
+      workspaceId: activeWorkspaceId,
+    });
+  }, [activeOrganizationId, activeWorkspaceId, persistLibraryLocation]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2369,6 +2495,140 @@ export default function Page() {
     setAskLibraryModel(null);
     setAiInboxItems([]);
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    pendingScrollRestoreSelectionKeyRef.current =
+      buildLibrarySelectionStorageKey(activeOrganizationId, activeWorkspaceId);
+    hasSeenResourcesLoadingForScrollRestoreRef.current = false;
+  }, [activeOrganizationId, activeWorkspaceId]);
+
+  useEffect(() => {
+    if (
+      !pendingScrollRestoreSelectionKeyRef.current ||
+      !isResourcesLoading
+    ) {
+      return;
+    }
+
+    hasSeenResourcesLoadingForScrollRestoreRef.current = true;
+  }, [isResourcesLoading]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || isReallyCompactMode) {
+      return;
+    }
+
+    const resourceViewport = resourceScrollContainerRef.current;
+    if (!resourceViewport) {
+      return;
+    }
+
+    const selectionKey = buildLibrarySelectionStorageKey(
+      activeOrganizationId,
+      activeWorkspaceId,
+    );
+    const handleScroll = () => {
+      if (isApplyingScrollRestoreRef.current) {
+        return;
+      }
+
+      scrollOffsetsBySelectionRef.current[selectionKey] = Math.max(
+        0,
+        Math.floor(resourceViewport.scrollTop),
+      );
+
+      if (scrollPersistRafRef.current !== null) {
+        return;
+      }
+
+      scrollPersistRafRef.current = window.requestAnimationFrame(() => {
+        scrollPersistRafRef.current = null;
+        persistLibraryLocation({
+          organizationId: activeOrganizationId,
+          workspaceId: activeWorkspaceId,
+        });
+      });
+    };
+
+    resourceViewport.addEventListener("scroll", handleScroll, {
+      passive: true,
+    });
+
+    return () => {
+      resourceViewport.removeEventListener("scroll", handleScroll);
+    };
+  }, [
+    activeOrganizationId,
+    activeWorkspaceId,
+    isReallyCompactMode,
+    persistLibraryLocation,
+  ]);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      isReallyCompactMode ||
+      !hasResolvedInitialWorkspace ||
+      isResourcesLoading
+    ) {
+      return;
+    }
+
+    const resourceViewport = resourceScrollContainerRef.current;
+    if (!resourceViewport) {
+      return;
+    }
+
+    const selectionKey = buildLibrarySelectionStorageKey(
+      activeOrganizationId,
+      activeWorkspaceId,
+    );
+    if (pendingScrollRestoreSelectionKeyRef.current !== selectionKey) {
+      return;
+    }
+    if (!hasSeenResourcesLoadingForScrollRestoreRef.current) {
+      return;
+    }
+
+    const targetOffset = scrollOffsetsBySelectionRef.current[selectionKey] ?? 0;
+    isApplyingScrollRestoreRef.current = true;
+    resourceViewport.scrollTop = targetOffset;
+
+    if (scrollRestoreRafRef.current !== null) {
+      window.cancelAnimationFrame(scrollRestoreRafRef.current);
+    }
+    scrollRestoreRafRef.current = window.requestAnimationFrame(() => {
+      isApplyingScrollRestoreRef.current = false;
+      scrollRestoreRafRef.current = null;
+    });
+
+    pendingScrollRestoreSelectionKeyRef.current = null;
+    hasSeenResourcesLoadingForScrollRestoreRef.current = false;
+  }, [
+    activeOrganizationId,
+    activeWorkspaceId,
+    hasResolvedInitialWorkspace,
+    isReallyCompactMode,
+    isResourcesLoading,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      if (scrollPersistRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollPersistRafRef.current);
+        scrollPersistRafRef.current = null;
+      }
+
+      if (scrollRestoreRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRestoreRafRef.current);
+        scrollRestoreRafRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -4870,23 +5130,19 @@ export default function Page() {
         </Button>
 
         <div className="flex items-center gap-2.5">
-          <div
+          <img
+            src="/bluesix-cloud-text-logo.png"
+            alt="BlueSix"
+            width={256}
+            height={64}
             className={cn(
-              "flex items-center justify-center rounded-lg bg-primary text-primary-foreground",
-              isReallyCompactMode ? "h-7 w-7" : "h-8 w-8",
+              "h-auto w-auto shrink-0 object-contain",
+              isReallyCompactMode
+                ? "max-h-7 max-w-[7.5rem]"
+                : "max-h-8 max-w-[8.5rem] sm:max-w-[10rem]",
             )}
-          >
-            <BookOpen className={cn(isReallyCompactMode ? "h-3.5 w-3.5" : "h-4 w-4")} />
-          </div>
-          <div
-            className={cn(
-              "hidden items-center gap-2.5 sm:flex",
-              isReallyCompactMode ? "sm:hidden" : undefined,
-            )}
-          >
-            <h1 className="text-base font-semibold leading-tight text-foreground">
-              BlueSix
-            </h1>
+          />
+          <div className="hidden items-center gap-2.5 sm:flex">
             {isAuthenticated &&
             session?.user?.email &&
             generalSettings.showAccountEmail ? (
@@ -5549,6 +5805,7 @@ export default function Page() {
         <ContextMenu onOpenChange={handleLibraryContextMenuOpenChange}>
           <ContextMenuTrigger asChild>
             <main
+              ref={resourceScrollContainerRef}
               className={cn(
                 "flex-1 overflow-x-hidden",
                 isReallyCompactMode

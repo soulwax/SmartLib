@@ -652,14 +652,36 @@ async function attachTagsAndFavicons(
       : Promise.resolve(new Map<string, string | null>()),
   ]);
 
+  // Generate inline SVG data URIs for hostnames not in cache
+  const fallbackFavicons = new Map<string, string>();
+  for (const hostname of allHostnames) {
+    if (!faviconByHostname.has(hostname)) {
+      // Generate inline SVG instead of relying on external Google service
+      const normalized = hostname.trim().toLowerCase();
+      const parts = normalized.split(".");
+      const domain = parts.length > 1 ? parts[parts.length - 2] : parts[0];
+      const initials = domain.length > 1
+        ? domain.substring(0, 2).toUpperCase()
+        : domain.substring(0, 1).toUpperCase();
+
+      // Simple hash for consistent color
+      const hash = hostname.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      const colors = ["#1976D2", "#388E3C", "#D32F2F", "#7B1FA2", "#F57C00", "#0097A7", "#C2185B", "#5D4037", "#455A64", "#E64A19"];
+      const bgColor = colors[hash % colors.length];
+
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${bgColor}" rx="8"/><text x="32" y="32" text-anchor="middle" dominant-baseline="central" font-family="system-ui,-apple-system,sans-serif" font-size="28" font-weight="600" fill="white">${initials}</text></svg>`;
+      const dataUri = `data:image/svg+xml;base64,${Buffer.from(svg, "utf-8").toString("base64")}`;
+      fallbackFavicons.set(hostname, dataUri);
+    }
+  }
+
   return resources.map((resource) => ({
     ...resource,
     tags: tagsByResourceId.get(resource.id) ?? [],
     links: resource.links.map((link) => {
       const hostname = hostnameFromUrl(link.url);
       const faviconUrl = hostname
-        ? (faviconByHostname.get(hostname) ??
-          fallbackFaviconUrlForHostname(hostname))
+        ? (faviconByHostname.get(hostname) ?? fallbackFavicons.get(hostname) ?? null)
         : null;
       return { ...link, faviconUrl };
     }),

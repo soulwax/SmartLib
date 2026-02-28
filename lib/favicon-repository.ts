@@ -132,6 +132,7 @@ export async function listHostnamesMissingStoredFavicons(
  *   - have no entry in favicon_cache yet, OR
  *   - were last checked more than `staleAfterHours` hours ago.
  *   - or do not yet have a persisted favicon image payload.
+ *   - or have a generated fallback but should retry real favicons every 7 days.
  *
  * Hostname extraction is done in TypeScript to avoid complex SQL parsing.
  */
@@ -141,6 +142,7 @@ export async function listStaleOrMissingHostnames(
 ): Promise<string[]> {
   const db = getDb()
   const threshold = new Date(Date.now() - staleAfterHours * 60 * 60 * 1000)
+  const generatedRetryThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days
 
   // All distinct link URLs
   const linkRows = await db.selectDistinct({ url: resourceLinks.url }).from(resourceLinks)
@@ -166,6 +168,7 @@ export async function listStaleOrMissingHostnames(
       hostname: faviconCache.hostname,
       lastCheckedAt: faviconCache.lastCheckedAt,
       faviconBase64: faviconCache.faviconBase64,
+      faviconUrl: faviconCache.faviconUrl,
     })
     .from(faviconCache)
     .where(inArray(faviconCache.hostname, hostnameList))
@@ -176,7 +179,18 @@ export async function listStaleOrMissingHostnames(
       row.lastCheckedAt instanceof Date
         ? row.lastCheckedAt
         : new Date(row.lastCheckedAt)
-    if (checkedAt >= threshold && !!row.faviconBase64) {
+
+    const hasImageData = !!row.faviconBase64
+    const isGenerated = row.faviconUrl?.startsWith("generated:")
+
+    // Fresh if:
+    // - Has image data AND checked recently
+    // - OR is not generated and checked within normal threshold
+    // Generated favicons should be retried for real favicons less frequently
+    if (hasImageData && checkedAt >= threshold) {
+      freshSet.add(row.hostname)
+    } else if (isGenerated && checkedAt >= generatedRetryThreshold) {
+      // Don't retry generated favicons too often
       freshSet.add(row.hostname)
     }
   }

@@ -140,9 +140,15 @@ async function fetchFaviconAtUrl(
       credentials: "omit",
       redirect: "follow",
       cache: "no-store",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; FaviconBot/1.0)",
+      },
     })
 
     if (!response.ok) {
+      if (response.status >= 500) {
+        console.warn(`[favicon] Server error fetching ${sourceUrl}: ${response.status}`)
+      }
       return null
     }
 
@@ -151,6 +157,7 @@ async function fetchFaviconAtUrl(
       10
     )
     if (Number.isFinite(declaredLength) && declaredLength > MAX_FAVICON_BYTES) {
+      console.warn(`[favicon] Favicon too large at ${sourceUrl}: ${declaredLength} bytes`)
       return null
     }
 
@@ -159,11 +166,13 @@ async function fetchFaviconAtUrl(
       sourceUrl
     )
     if (!contentType) {
+      console.warn(`[favicon] Invalid content type for ${sourceUrl}`)
       return null
     }
 
     const bytes = Buffer.from(await response.arrayBuffer())
     if (bytes.length === 0 || bytes.length > MAX_FAVICON_BYTES) {
+      console.warn(`[favicon] Invalid size for ${sourceUrl}: ${bytes.length} bytes`)
       return null
     }
 
@@ -172,7 +181,14 @@ async function fetchFaviconAtUrl(
       contentBase64: bytes.toString("base64"),
       contentHash: createHash("sha256").update(bytes).digest("hex"),
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.name === "AbortError" || error.name === "TimeoutError") {
+        console.warn(`[favicon] Timeout fetching ${sourceUrl}`)
+      } else {
+        console.warn(`[favicon] Error fetching ${sourceUrl}:`, error.message)
+      }
+    }
     return null
   }
 }
@@ -180,27 +196,34 @@ async function fetchFaviconAtUrl(
 /**
  * Resolve and download favicon image data for a hostname.
  * Falls back to a generated SVG if no favicon can be fetched.
+ *
+ * @param hostname - The hostname to resolve favicon for
+ * @param options - Optional configuration
+ * @returns ResolvedFaviconPayload or null if hostname is invalid
  */
-export async function resolveFavicon(hostname: string): Promise<ResolvedFaviconPayload | null> {
+export async function resolveFavicon(
+  hostname: string,
+  options?: { skipGoogleFallback?: boolean }
+): Promise<ResolvedFaviconPayload | null> {
   if (!hostname) return null
 
   const candidateUrls = [
     `https://${hostname}/favicon.ico`,
-    fallbackFaviconUrlForHostname(hostname, DEFAULT_FAVICON_SIZE),
+    ...(options?.skipGoogleFallback ? [] : [fallbackFaviconUrlForHostname(hostname, DEFAULT_FAVICON_SIZE)]),
   ].filter((url): url is string => Boolean(url))
 
   for (const sourceUrl of candidateUrls) {
     const resolved = await fetchFaviconAtUrl(sourceUrl)
-    if (!resolved) {
-      continue
-    }
-
-    return {
-      sourceUrl,
-      ...resolved,
+    if (resolved) {
+      console.log(`[favicon] Successfully fetched from ${sourceUrl}`)
+      return {
+        sourceUrl,
+        ...resolved,
+      }
     }
   }
 
   // Generate fallback SVG if no favicon could be fetched
+  console.log(`[favicon] Using generated SVG for ${hostname}`)
   return generateFallbackFavicon(hostname)
 }

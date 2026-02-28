@@ -6,11 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- New role-boundary verification matrix and automated guard checker (`docs/role-boundary-verification-matrix.md`, `scripts/verify-role-boundaries.mjs`, `pnpm verify:role-boundaries`)
+- New logical backup/restore tooling with backup drill and verification commands (`scripts/db-backup-restore.mjs`, `pnpm db:backup*`, `pnpm db:restore`)
+- New backup/restore runbook documenting operational drill and restore steps (`docs/backup-restore-runbook.md`)
+
 ### Changed
 
 - Standardized API error payloads across all route handlers to a typed contract: `{ ok: false, error, code, details? }`
 - Added shared API error utilities (`lib/api-error.ts`) and migrated route-level validation/error branches to consistent status-code + error-code responses
 - Normalized rate-limit responses to include a stable `RATE_LIMITED` error code while preserving existing retry headers
+- Added `backups/` to `.gitignore` to prevent accidental snapshot commits
 
 ## [0.2.10] - 2026-02-28
 

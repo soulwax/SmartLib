@@ -39,5 +39,8 @@ jobs:
       - name: Typecheck + build
         run: pnpm run check
 
+      - name: Verify role boundaries
+        run: pnpm run verify:role-boundaries
+
       - name: Run tests (if present)
         run: pnpm run test --if-present

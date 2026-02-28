@@ -27,8 +27,8 @@ Goal: ship a stable, secure, presentable public MVP of BlueSix for real users.
 - [x] Fix migration workflow so deploys do not require manual patching (completed 2026-02-28; `scripts/reconcile-legacy-migrations.mjs`, `db:migrate` pre-reconcile)
 - [x] Add robust error handling and typed error responses on all API routes (completed 2026-02-28; `lib/api-error.ts`, standardized `{ ok: false, error, code, details? }`)
 - [ ] Complete loading/empty/error UI states for all async flows
-- [ ] Verify role boundaries (viewer/editor/admin/first_admin) end-to-end
-- [ ] Add backup and restore procedure (documented and test-run)
+- [x] Verify role boundaries (viewer/editor/admin/first_admin) end-to-end (completed 2026-02-28; `docs/role-boundary-verification-matrix.md`, `scripts/verify-role-boundaries.mjs`, `pnpm verify:role-boundaries`)
+- [ ] Add backup and restore procedure (documented and test-run; runbook + logical backup drill completed 2026-02-28 in `docs/backup-restore-runbook.md` and `docs/backup-restore-drill-2026-02-28.md`, full disposable-target restore run still pending)
 - [x] Add smoke test checklist for production release verification (completed 2026-02-28; `docs/production-smoke-test-checklist.md`)
 
 ### UX & Presentation

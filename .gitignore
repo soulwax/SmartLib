@@ -21,3 +21,6 @@ dist-electron/
 CLAUDE.md
 .vercel
 .env*.local
+
+.vercel
+.env*.local

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/soulwax/workspace/web/Next.JS/nandcore.com/**)",
+      "Bash(vercel env ls)"
+    ]
+  }
+}

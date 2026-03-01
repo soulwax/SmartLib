@@ -20,7 +20,7 @@
     "verify:role-boundaries": "node scripts/verify-role-boundaries.mjs",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "clean": "rimraf .next dist-electron dist",
+    "clean": "node scripts/clean.mjs",
     "electron:compile": "tsc --project tsconfig.electron.json",
     "electron:prebuild": "pnpm clean && cross-env BUILD_TARGET=electron next build && pnpm electron:compile",
     "electron:dev": "concurrently --kill-others-on-fail \"pnpm dev\" \"wait-on http://localhost:3000 && electron .\"",

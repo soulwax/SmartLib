@@ -2124,6 +2124,224 @@ export async function listResources(options?: {
   return attachTagsAndFavicons(mapRowsToResources(rows));
 }
 
+export async function getLibraryBootstrapData(options?: {
+  userId?: string | null;
+  organizationId?: string | null;
+  workspaceId?: string | null;
+  includeAllWorkspaces?: boolean;
+  offset?: number;
+  limit?: number;
+}): Promise<{
+  organizationId: string | null;
+  workspaceId: string | null;
+  resources: ResourceCard[];
+  nextOffset: number | null;
+  categories: ResourceCategory[];
+  organizations: ResourceOrganization[];
+  workspaces: ResourceWorkspace[];
+  workspaceCounts: Record<string, number>;
+}> {
+  await ensureSchema();
+  const db = getDb();
+  const normalizedUserId = normalizeActorUserId(options?.userId);
+  const requestedOrganizationId = options?.organizationId?.trim() || null;
+  const requestedWorkspaceId = options?.workspaceId?.trim() || null;
+  const offset = normalizePageOffset(options?.offset);
+  const limit = normalizePageLimit(options?.limit);
+
+  await ensureMainOrganization();
+
+  const organizationVisibilityCondition = options?.includeAllWorkspaces
+    ? undefined
+    : normalizedUserId
+      ? or(
+          isNull(resourceOrganizations.ownerUserId),
+          eq(resourceOrganizations.ownerUserId, normalizedUserId),
+        )
+      : isNull(resourceOrganizations.ownerUserId);
+
+  const organizationBaseQuery = db
+    .select({
+      id: resourceOrganizations.id,
+      name: resourceOrganizations.name,
+      ownerUserId: resourceOrganizations.ownerUserId,
+      createdAt: resourceOrganizations.createdAt,
+      updatedAt: resourceOrganizations.updatedAt,
+    })
+    .from(resourceOrganizations)
+    .orderBy(
+      sql`${resourceOrganizations.ownerUserId} IS NOT NULL`,
+      sql`lower(${resourceOrganizations.name}) asc`,
+    );
+  const organizationRows =
+    organizationVisibilityCondition === undefined
+      ? await organizationBaseQuery
+      : await organizationBaseQuery.where(organizationVisibilityCondition);
+  const organizations = (organizationRows as ResourceOrganizationRow[]).map(
+    normalizeOrganizationRow,
+  );
+  const visibleOrganizationIds = organizations.map((organization) => organization.id);
+  const effectiveOrganizationId =
+    requestedOrganizationId &&
+    visibleOrganizationIds.includes(requestedOrganizationId)
+      ? requestedOrganizationId
+      : (organizations[0]?.id ?? null);
+
+  let visibleWorkspaces: ResourceWorkspace[] = [];
+
+  if (visibleOrganizationIds.length > 0) {
+    const workspaceVisibilityCondition = options?.includeAllWorkspaces
+      ? undefined
+      : normalizedUserId
+        ? eq(resourceWorkspaces.ownerUserId, normalizedUserId)
+        : isNull(resourceWorkspaces.ownerUserId);
+    const workspaceOrganizationCondition =
+      visibleOrganizationIds.length === 1
+        ? eq(resourceWorkspaces.organizationId, visibleOrganizationIds[0])
+        : inArray(resourceWorkspaces.organizationId, visibleOrganizationIds);
+    const workspaceScopeCondition =
+      workspaceVisibilityCondition === undefined
+        ? workspaceOrganizationCondition
+        : and(workspaceVisibilityCondition, workspaceOrganizationCondition);
+
+    const workspaceRows = await db
+      .select({
+        id: resourceWorkspaces.id,
+        organizationId: resourceWorkspaces.organizationId,
+        name: resourceWorkspaces.name,
+        ownerUserId: resourceWorkspaces.ownerUserId,
+        createdAt: resourceWorkspaces.createdAt,
+        updatedAt: resourceWorkspaces.updatedAt,
+      })
+      .from(resourceWorkspaces)
+      .where(workspaceScopeCondition)
+      .orderBy(
+        sql`${resourceWorkspaces.ownerUserId} IS NOT NULL`,
+        sql`lower(${resourceWorkspaces.name}) asc`,
+      );
+
+    visibleWorkspaces = (workspaceRows as ResourceWorkspaceRow[]).map(
+      normalizeWorkspaceRow,
+    );
+  }
+
+  const visibleWorkspaceIds = visibleWorkspaces.map((workspace) => workspace.id);
+  let workspaceCounts: Record<string, number> = {};
+
+  if (visibleWorkspaceIds.length > 0) {
+    const workspaceCountScopeCondition =
+      visibleWorkspaceIds.length === 1
+        ? eq(resourceCards.workspaceId, visibleWorkspaceIds[0])
+        : inArray(resourceCards.workspaceId, visibleWorkspaceIds);
+    const countRows = await db
+      .select({
+        workspaceId: resourceCards.workspaceId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(resourceCards)
+      .where(and(isNull(resourceCards.deletedAt), workspaceCountScopeCondition))
+      .groupBy(resourceCards.workspaceId);
+
+    workspaceCounts = {};
+    for (const row of countRows) {
+      workspaceCounts[row.workspaceId] = Number(row.count) || 0;
+    }
+  }
+
+  const workspaces = effectiveOrganizationId
+    ? visibleWorkspaces.filter(
+        (workspace) => workspace.organizationId === effectiveOrganizationId,
+      )
+    : visibleWorkspaces;
+  const effectiveWorkspaceId =
+    requestedWorkspaceId &&
+    workspaces.some((workspace) => workspace.id === requestedWorkspaceId)
+      ? requestedWorkspaceId
+      : (workspaces[0]?.id ?? null);
+
+  let categories: ResourceCategory[] = [];
+  let resources: ResourceCard[] = [];
+  let nextOffset: number | null = null;
+
+  if (effectiveWorkspaceId) {
+    const [categoryRows, pageCards] = await Promise.all([
+      db
+        .select({
+          id: resourceCategories.id,
+          workspaceId: resourceCategories.workspaceId,
+          name: resourceCategories.name,
+          symbol: resourceCategories.symbol,
+          ownerUserId: resourceCategories.ownerUserId,
+          createdAt: resourceCategories.createdAt,
+          updatedAt: resourceCategories.updatedAt,
+        })
+        .from(resourceCategories)
+        .where(eq(resourceCategories.workspaceId, effectiveWorkspaceId))
+        .orderBy(sql`lower(${resourceCategories.name}) asc`),
+      db
+        .select({
+          id: resourceCards.id,
+          createdAt: resourceCards.createdAt,
+        })
+        .from(resourceCards)
+        .where(
+          and(
+            isNull(resourceCards.deletedAt),
+            eq(resourceCards.workspaceId, effectiveWorkspaceId),
+          ),
+        )
+        .orderBy(desc(resourceCards.createdAt), asc(resourceCards.id))
+        .offset(offset)
+        .limit(limit + 1),
+    ]);
+
+    categories = (categoryRows as ResourceCategoryRow[]).map(normalizeCategoryRow);
+
+    if (pageCards.length > 0) {
+      const hasMore = pageCards.length > limit;
+      const pagedCards = hasMore ? pageCards.slice(0, limit) : pageCards;
+      const pagedIds = pagedCards.map((card) => card.id);
+      const rowScopeCondition =
+        pagedIds.length === 1
+          ? eq(resourceCards.id, pagedIds[0])
+          : inArray(resourceCards.id, pagedIds);
+      const rows = await db
+        .select({
+          resourceId: resourceCards.id,
+          resourceWorkspaceId: resourceCards.workspaceId,
+          resourceCategoryId: resourceCards.categoryId,
+          resourceCategory: resourceCards.category,
+          resourceSortOrder: resourceCards.sortOrder,
+          resourceOwnerUserId: resourceCards.ownerUserId,
+          resourceDeletedAt: resourceCards.deletedAt,
+          resourceCreatedAt: resourceCards.createdAt,
+          linkId: resourceLinks.id,
+          linkUrl: resourceLinks.url,
+          linkLabel: resourceLinks.label,
+          linkNote: resourceLinks.note,
+        })
+        .from(resourceCards)
+        .leftJoin(resourceLinks, eq(resourceCards.id, resourceLinks.resourceId))
+        .where(rowScopeCondition)
+        .orderBy(desc(resourceCards.createdAt), asc(resourceLinks.position));
+
+      resources = await attachTagsAndFavicons(mapRowsToResources(rows));
+      nextOffset = hasMore ? offset + limit : null;
+    }
+  }
+
+  return {
+    organizationId: effectiveOrganizationId,
+    workspaceId: effectiveWorkspaceId,
+    resources,
+    nextOffset,
+    categories,
+    organizations,
+    workspaces,
+    workspaceCounts,
+  };
+}
+
 export async function listResourcesPage(options?: {
   userId?: string | null;
   workspaceId?: string | null;

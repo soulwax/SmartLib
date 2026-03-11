@@ -1,11 +1,23 @@
 import React from "react";
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { Inter, JetBrains_Mono } from "next/font/google";
 
+import { auth } from "@/auth";
 import { AuthProvider } from "@/components/auth-provider";
 import { ColorSchemeProvider } from "@/components/color-scheme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  findColorSchemePreferenceByUserId,
+  findColorSchemePreferenceByVisitorId,
+} from "@/lib/color-scheme-preference-repository";
+import {
+  DEFAULT_COLOR_SCHEME_ID,
+  normalizeColorSchemeId,
+} from "@/lib/color-schemes";
 import "./globals.css";
+
+const VISITOR_ID_COOKIE = "dv_visitor_id";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -35,16 +47,48 @@ export const viewport: Viewport = {
   themeColor: "#0f1117",
 };
 
-export default function RootLayout({
+async function resolveInitialColorSchemeId() {
+  const [session, cookieStore] = await Promise.all([auth(), cookies()]);
+
+  if (session?.user?.id) {
+    const userPreference = await findColorSchemePreferenceByUserId(session.user.id);
+    if (userPreference) {
+      return {
+        session,
+        colorSchemeId: normalizeColorSchemeId(userPreference.colorScheme),
+      };
+    }
+  }
+
+  const visitorId = cookieStore.get(VISITOR_ID_COOKIE)?.value?.trim();
+  if (visitorId) {
+    const visitorPreference = await findColorSchemePreferenceByVisitorId(visitorId);
+    if (visitorPreference) {
+      return {
+        session,
+        colorSchemeId: normalizeColorSchemeId(visitorPreference.colorScheme),
+      };
+    }
+  }
+
+  return {
+    session,
+    colorSchemeId: DEFAULT_COLOR_SCHEME_ID,
+  };
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const { session, colorSchemeId } = await resolveInitialColorSchemeId();
+
   return (
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body className="font-sans antialiased">
-        <AuthProvider>
-          <ColorSchemeProvider>
+        <AuthProvider session={session}>
+          <ColorSchemeProvider initialColorSchemeId={colorSchemeId}>
             <TooltipProvider delayDuration={400}>{children}</TooltipProvider>
           </ColorSchemeProvider>
         </AuthProvider>

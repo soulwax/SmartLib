@@ -38,6 +38,7 @@ import {
   deleteResourceCategory as deleteDbResourceCategory,
   deleteResource as deleteDbResource,
   deleteResourceWorkspace as deleteDbResourceWorkspace,
+  getLibraryBootstrapData as getDbLibraryBootstrapData,
   hasAnyResources as hasAnyDbResources,
   listResourceCategories as listDbResourceCategories,
   listResourceAuditLogs as listDbResourceAuditLogs,
@@ -67,6 +68,17 @@ import type {
 } from "@/lib/resources";
 
 export type ResourceDataMode = "database" | "mock";
+
+export interface LibraryBootstrapData {
+  organizationId: string | null;
+  workspaceId: string | null;
+  resources: ResourceCard[];
+  nextOffset: number | null;
+  categories: ResourceCategory[];
+  organizations: ResourceOrganization[];
+  workspaces: ResourceWorkspace[];
+  workspaceCounts: Record<string, number>;
+}
 
 let databaseBootstrap: Promise<void> | null = null;
 const ENABLE_RESOURCE_STARTUP_MAINTENANCE = getBooleanEnv(
@@ -308,6 +320,89 @@ export async function listResourcesPageService(options?: {
     limit: options?.limit,
   });
   return { mode, ...result };
+}
+
+export async function getLibraryBootstrapService(options?: {
+  userId?: string | null;
+  organizationId?: string | null;
+  workspaceId?: string | null;
+  includeAllWorkspaces?: boolean;
+  offset?: number;
+  limit?: number;
+}): Promise<{ mode: ResourceDataMode } & LibraryBootstrapData> {
+  const mode = currentMode();
+
+  if (mode === "database") {
+    await ensureDatabaseBootstrapped();
+
+    return {
+      mode,
+      ...(await getDbLibraryBootstrapData({
+        userId: options?.userId,
+        organizationId: options?.organizationId,
+        workspaceId: options?.workspaceId,
+        includeAllWorkspaces: options?.includeAllWorkspaces,
+        offset: options?.offset,
+        limit: options?.limit,
+      })),
+    };
+  }
+
+  const organizations = await listMockResourceOrganizations({
+    userId: options?.userId,
+    includeAllWorkspaces: options?.includeAllWorkspaces,
+  });
+  const requestedOrganizationId = options?.organizationId?.trim() || null;
+  const effectiveOrganizationId =
+    requestedOrganizationId &&
+    organizations.some((organization) => organization.id === requestedOrganizationId)
+      ? requestedOrganizationId
+      : (organizations[0]?.id ?? null);
+  const workspaces = await listMockResourceWorkspaces({
+    userId: options?.userId,
+    organizationId: effectiveOrganizationId,
+    includeAllWorkspaces: options?.includeAllWorkspaces,
+  });
+  const requestedWorkspaceId = options?.workspaceId?.trim() || null;
+  const effectiveWorkspaceId =
+    requestedWorkspaceId &&
+    workspaces.some((workspace) => workspace.id === requestedWorkspaceId)
+      ? requestedWorkspaceId
+      : (workspaces[0]?.id ?? null);
+  const [resourcesResult, categories, workspaceCounts] = await Promise.all([
+    effectiveWorkspaceId
+      ? listMockResourcesPage({
+          userId: options?.userId,
+          workspaceId: effectiveWorkspaceId,
+          includeAllWorkspaces: options?.includeAllWorkspaces,
+          offset: options?.offset,
+          limit: options?.limit,
+        })
+      : Promise.resolve({ resources: [], nextOffset: null }),
+    effectiveWorkspaceId
+      ? listMockResourceCategories({
+          userId: options?.userId,
+          workspaceId: effectiveWorkspaceId,
+          includeAllWorkspaces: options?.includeAllWorkspaces,
+        })
+      : Promise.resolve([]),
+    listMockResourceCountsByWorkspace({
+      userId: options?.userId,
+      includeAllWorkspaces: options?.includeAllWorkspaces,
+    }),
+  ]);
+
+  return {
+    mode,
+    organizationId: effectiveOrganizationId,
+    workspaceId: effectiveWorkspaceId,
+    resources: resourcesResult.resources,
+    nextOffset: resourcesResult.nextOffset,
+    categories,
+    organizations,
+    workspaces,
+    workspaceCounts,
+  };
 }
 
 export async function listResourceWorkspaceCountsService(options?: {

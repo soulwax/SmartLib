@@ -84,54 +84,27 @@ function readLocalColorSchemeId(): ColorSchemeId | null {
   }
 }
 
-export function ColorSchemeProvider({ children }: { children: ReactNode }) {
+export function ColorSchemeProvider({
+  children,
+  initialColorSchemeId = DEFAULT_COLOR_SCHEME_ID,
+}: {
+  children: ReactNode
+  initialColorSchemeId?: ColorSchemeId
+}) {
   const [currentColorSchemeId, setCurrentColorSchemeId] =
-    useState<ColorSchemeId>(DEFAULT_COLOR_SCHEME_ID)
+    useState<ColorSchemeId>(normalizeColorSchemeId(initialColorSchemeId))
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
-
     const localColorSchemeId = readLocalColorSchemeId()
-    if (localColorSchemeId) {
-      setCurrentColorSchemeId(localColorSchemeId)
-      applyColorSchemeToDocument(localColorSchemeId)
-    } else {
-      applyColorSchemeToDocument(DEFAULT_COLOR_SCHEME_ID)
-    }
+    const resolvedColorSchemeId =
+      localColorSchemeId ?? normalizeColorSchemeId(initialColorSchemeId)
 
-    void (async () => {
-      try {
-        const response = await fetch("/api/preferences/color-scheme", {
-          cache: "no-store",
-        })
-        const payload = (await response
-          .json()
-          .catch(() => null)) as ColorSchemeApiResponse | null
-
-        if (!response.ok || !payload?.colorSchemeId || !isColorSchemeId(payload.colorSchemeId)) {
-          return
-        }
-
-        if (cancelled) {
-          return
-        }
-
-        setCurrentColorSchemeId(payload.colorSchemeId)
-        applyColorSchemeToDocument(payload.colorSchemeId)
-        persistColorSchemeLocally(payload.colorSchemeId)
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false)
-        }
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
+    setCurrentColorSchemeId(resolvedColorSchemeId)
+    applyColorSchemeToDocument(resolvedColorSchemeId)
+    setIsLoading(false)
+  }, [initialColorSchemeId])
 
   const setColorSchemeById = useCallback(
     async (
@@ -233,4 +206,3 @@ export function useColorScheme() {
 
   return context
 }
-

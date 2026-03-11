@@ -3,11 +3,7 @@ import { NextResponse } from "next/server"
 import { auth } from "@/auth"
 import { createApiErrorResponse } from "@/lib/api-error"
 import {
-  listResourceCategoriesService,
-  listResourceOrganizationsService,
-  listResourcesPageService,
-  listResourceWorkspaceCountsService,
-  listResourceWorkspacesService,
+  getLibraryBootstrapService,
 } from "@/lib/resource-service"
 
 export const runtime = "nodejs"
@@ -43,63 +39,24 @@ export async function GET(request: Request) {
       includeAllWorkspaces: session?.user?.isFirstAdmin === true,
     }
 
-    const [organizationsResult, countsResult] =
-      await Promise.all([
-        listResourceOrganizationsService(options),
-        listResourceWorkspaceCountsService(options),
-      ])
-    const hasRequestedOrganization =
-      requestedOrganizationId !== null &&
-      organizationsResult.organizations.some(
-        (organization) => organization.id === requestedOrganizationId,
-      )
-    const effectiveOrganizationId = hasRequestedOrganization
-      ? requestedOrganizationId
-      : (organizationsResult.organizations[0]?.id ?? null)
-    const workspacesResult = await listResourceWorkspacesService({
+    const result = await getLibraryBootstrapService({
       ...options,
-      organizationId: effectiveOrganizationId,
+      organizationId: requestedOrganizationId,
+      workspaceId: requestedWorkspaceId,
+      offset: 0,
+      limit,
     })
-    const hasRequestedWorkspace =
-      requestedWorkspaceId !== null &&
-      workspacesResult.workspaces.some(
-        (workspace) => workspace.id === requestedWorkspaceId,
-      )
-    const effectiveWorkspaceId = hasRequestedWorkspace
-      ? requestedWorkspaceId
-      : (workspacesResult.workspaces[0]?.id ?? null)
-    const [resourcesResult, categoriesResult] = await Promise.all([
-      listResourcesPageService({
-        ...options,
-        workspaceId: effectiveWorkspaceId,
-        offset: 0,
-        limit,
-      }),
-      listResourceCategoriesService({
-        ...options,
-        workspaceId: effectiveWorkspaceId,
-      }),
-    ])
-
-    const mode =
-      resourcesResult.mode === "database" ||
-      categoriesResult.mode === "database" ||
-      organizationsResult.mode === "database" ||
-      workspacesResult.mode === "database" ||
-      countsResult.mode === "database"
-        ? "database"
-        : "mock"
 
     return NextResponse.json({
-      mode,
-      organizationId: effectiveOrganizationId,
-      workspaceId: effectiveWorkspaceId,
-      resources: resourcesResult.resources,
-      nextOffset: resourcesResult.nextOffset,
-      categories: categoriesResult.categories,
-      organizations: organizationsResult.organizations,
-      workspaces: workspacesResult.workspaces,
-      workspaceCounts: countsResult.countsByWorkspace,
+      mode: result.mode,
+      organizationId: result.organizationId,
+      workspaceId: result.workspaceId,
+      resources: result.resources,
+      nextOffset: result.nextOffset,
+      categories: result.categories,
+      organizations: result.organizations,
+      workspaces: result.workspaces,
+      workspaceCounts: result.workspaceCounts,
     })
   } catch {
     return createApiErrorResponse({

@@ -6,6 +6,108 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- New role-boundary verification matrix and automated guard checker (`docs/role-boundary-verification-matrix.md`, `scripts/verify-role-boundaries.mjs`, `pnpm verify:role-boundaries`)
+- New logical backup/restore tooling with backup drill and verification commands (`scripts/db-backup-restore.mjs`, `pnpm db:backup*`, `pnpm db:restore`)
+- New backup/restore runbook documenting operational drill and restore steps (`docs/backup-restore-runbook.md`)
+- New backup/restore drill report including successful disposable-target restore validation (`docs/backup-restore-drill-2026-02-28.md`)
+
+### Changed
+
+- Standardized API error payloads across all route handlers to a typed contract: `{ ok: false, error, code, details? }`
+- Added shared API error utilities (`lib/api-error.ts`) and migrated route-level validation/error branches to consistent status-code + error-code responses
+- Normalized rate-limit responses to include a stable `RATE_LIMITED` error code while preserving existing retry headers
+- Added `backups/` to `.gitignore` to prevent accidental snapshot commits
+- Documented and executed full restore drill on a disposable Neon target (with post-restore row-count parity checks)
+
+## [0.2.10] - 2026-02-28
+
+### Added
+
+- New password reset recovery flow: `POST /api/auth/request-password-reset`, `POST /api/auth/reset-password`, and `/reset-password`
+- New account lifecycle endpoints: `GET /api/account/export` (JSON export) and `DELETE /api/account/delete` (confirmed deletion)
+- Preferences account-deletion UX requiring data export confirmation plus email/phrase confirmation before destructive action
+- Published legal pages for public launch: `/privacy` and `/terms`
+- New health endpoints: `GET /api/health/live` (liveness) and `GET /api/health/ready` (readiness with database + rate-limit backend checks)
+- Production incident response playbook at `docs/incident-playbook.md`
+- Production release smoke checklist at `docs/production-smoke-test-checklist.md`
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`) enforcing typecheck/build and running tests when present
+
+### Changed
+
+- `db:migrate` now runs a reconciliation step first (`db:migrate:reconcile`) to avoid manual legacy migration patching
+- Credentials sign-in now resolves accounts by either email or username, matching the login UI label
+- GitHub private-email fallback addresses now include the GitHub user id (`username+github-<id>@github.local`) to reduce collision risk
+- Applied endpoint-level rate limiting across auth mutations, AI endpoints, and state-changing write routes with structured `429` responses and retry headers
+- Auth session/JWT lifetimes are now explicitly configured with safe defaults and env overrides (`AUTH_SESSION_MAX_AGE_SECONDS`, `AUTH_SESSION_UPDATE_AGE_SECONDS`)
+
+### Fixed
+
+- Improved Redis rate-limit response parsing and fallback handling to avoid invalid-response crashes
+- Hardened GitHub account-linking flow to avoid linking by reserved fallback-domain emails
+- Registration now rejects reserved `@github.local` addresses so local credentials cannot claim provider-only fallback identifiers
+- CSRF origin validation is now enforced across all state-changing API routes (`POST`, `PUT`, `PATCH`, `DELETE`)
+- Session auth-state refresh now invalidates stale JWT identity when the backing user no longer exists
+
+### Security
+
+- Added a Redis-backed rate limiting module with per-rule windows, IP/user subject keys, and automatic in-memory fallback when Redis is unavailable
+- Credentials login attempts are now throttled per identifier to reduce brute-force risk
+- Enforced stricter production auth configuration requirements for `NEXTAUTH_URL` (https) and secret strength validation
+- Cron bearer-secret authorization now uses timing-safe comparison
+
+## [0.2.9] - 2026-02-28
+
+### Added
+
+- Public MVP launch planning document in `TODO.md`, including scope, P0 launch gates, known risks, and success metrics
+- SVG favicon asset and metadata icon configuration for modern browser tab support
+
+### Changed
+
+- Header branding now uses `public/bluesix-cloud-text-logo.png` instead of the previous icon-plus-text mark
+- Library location persistence now stores and restores `organization > workspace > scroll offset` in localStorage for faster context recovery
+
+### Fixed
+
+- Scroll restoration timing now waits for workspace resource load completion to avoid early/jumpy restores during selection changes
+
+### Known Issues
+
+- Scroll offset persistence is currently focused on the desktop main board viewport and may not fully mirror compact-mode interaction states
+- Some browsers may continue showing a stale favicon briefly due to cache retention after deploy
+- Location persistence is browser-local (localStorage) and does not sync across devices/sessions
+
+## [0.2.8] - 2026-02-28
+
+### Added
+
+- New CSRF protection utility (`lib/csrf-protection.ts`) with Origin/Referer validation for state-changing requests
+- Database index on `app_users.created_at` for improved user management query performance
+- Database index on `resource_cards (workspace_id, category_id, deleted_at)` for optimized category filtering with soft deletes
+- Database index on `resource_cards.deleted_at` for faster archive queries
+- Database index on `resource_links (lower(url))` for efficient URL duplicate detection
+- Migration script (`scripts/apply-indexes.mjs`) for manually applying database indexes
+
+### Changed
+
+- Auth secret configuration now properly validates `NEXTAUTH_SECRET` or `AUTH_SECRET` with secure fallback behavior
+- Auth secret only allows insecure dev fallback in development mode; throws error in production if not configured
+- Category rebalancing now uses batched SQL updates (single query) instead of N individual updates, eliminating N+1 query pattern
+- CSRF protection applied to `/api/items/move` endpoint as reference implementation
+
+### Fixed
+
+- **CRITICAL SECURITY**: Removed dangerous auth secret fallback chain that used `DATABASE_URL` as JWT signing secret
+- Performance bottleneck in `rebalanceCategoryOrders()` that executed separate UPDATE query for each resource card
+
+### Security
+
+- Auth secret validation now enforces proper cryptographic secrets in production environments
+- CSRF protection framework ready for deployment across all state-changing API endpoints
+- Removed database URL exposure risk in JWT token generation
+
 ## [0.2.7] - 2026-02-22
 
 ### Changed

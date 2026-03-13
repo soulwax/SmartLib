@@ -5895,7 +5895,7 @@ export default function LibraryPageClient({
         <aside
           className={cn(
             "hidden shrink-0 border-r border-border bg-card md:block",
-            isReallyCompactMode ? "w-9" : "w-12",
+            isReallyCompactMode ? "w-12" : "w-56",
           )}
           aria-label="Organization navigation"
         >

@@ -459,8 +459,11 @@ export const faviconCache = pgTable(
     faviconContentType: text("favicon_content_type"),
     faviconBase64: text("favicon_base64"),
     faviconHash: text("favicon_hash"),
+    fetchEtag: text("fetch_etag"),
+    fetchLastModified: text("fetch_last_modified"),
     lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }).notNull(),
     lastChangedAt: timestamp("last_changed_at", { withTimezone: true }).notNull(),
+    nextCheckAt: timestamp("next_check_at", { withTimezone: true }),
   },
   (table) => [
     check(
@@ -472,6 +475,7 @@ export const faviconCache = pgTable(
       sql`${table.faviconHash} IS NULL OR char_length(${table.faviconHash}) = 64`
     ),
     index("favicon_cache_last_checked_at_idx").on(table.lastCheckedAt),
+    index("favicon_cache_next_check_at_idx").on(table.nextCheckAt),
   ]
 )
 

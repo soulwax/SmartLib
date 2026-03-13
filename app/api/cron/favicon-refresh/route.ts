@@ -4,19 +4,20 @@ import { NextResponse } from "next/server"
 
 import { createApiErrorResponse } from "@/lib/api-error"
 import { ensureSchema } from "@/lib/db"
-import { listStaleOrMissingHostnames, upsertFaviconCache } from "@/lib/favicon-repository"
-import { resolveFavicon } from "@/lib/favicon-service"
+import {
+  FAVICON_REVALIDATE_INTERVAL_HOURS,
+  listDueFaviconCacheEntries,
+  listUncachedHostnames,
+  markFaviconCacheChecked,
+  upsertFaviconCache,
+} from "@/lib/favicon-repository"
+import { resolveFavicon, revalidateFavicon } from "@/lib/favicon-service"
 
 export const runtime = "nodejs"
 export const maxDuration = 60
 
-// Lazy refresh: check favicons older than 24 hours, process 50 at a time
-// Generated fallbacks are retried every 7 days (configured in repository)
-const STALE_AFTER_HOURS = 24
-const BATCH_LIMIT = 50
-
-// Add retry count to avoid infinite retries on persistently broken hostnames
-const MAX_CONSECUTIVE_FAILURES = 3
+const REVALIDATE_BATCH_LIMIT = 50
+const UNCACHED_BATCH_LIMIT = 25
 
 function isAuthorized(request: Request): boolean {
   const cronSecret = process.env.CRON_SECRET
@@ -48,24 +49,87 @@ export async function GET(request: Request) {
   try {
     await ensureSchema()
 
-    const hostnames = await listStaleOrMissingHostnames(STALE_AFTER_HOURS, BATCH_LIMIT)
+    const dueEntries = await listDueFaviconCacheEntries(REVALIDATE_BATCH_LIMIT)
+    const uncachedHostnames =
+      dueEntries.length < REVALIDATE_BATCH_LIMIT
+        ? await listUncachedHostnames(UNCACHED_BATCH_LIMIT)
+        : []
 
-    if (hostnames.length === 0) {
-      return NextResponse.json({ refreshed: 0, message: "All favicons are fresh." })
+    if (dueEntries.length === 0 && uncachedHostnames.length === 0) {
+      return NextResponse.json({
+        refreshed: 0,
+        message: "All favicons are fresh.",
+        revalidateAfterHours: FAVICON_REVALIDATE_INTERVAL_HOURS,
+      })
     }
 
-    const results = await Promise.allSettled(
-      hostnames.map(async (hostname) => {
+    const revalidationResults = await Promise.allSettled(
+      dueEntries.map(async (entry) => {
+        try {
+          const result = await revalidateFavicon(entry.hostname, {
+            sourceUrl: entry.faviconUrl,
+            etag: entry.fetchEtag,
+            lastModified: entry.fetchLastModified,
+          })
+
+          if (!result) {
+            await markFaviconCacheChecked(entry.hostname)
+            return {
+              hostname: entry.hostname,
+              sourceUrl: entry.faviconUrl,
+              status: "deferred" as const,
+              changed: false,
+            }
+          }
+
+          if (result.status === "not-modified") {
+            await markFaviconCacheChecked(entry.hostname, {
+              sourceUrl: result.sourceUrl,
+              etag: result.etag,
+              lastModified: result.lastModified,
+            })
+            return {
+              hostname: entry.hostname,
+              sourceUrl: result.sourceUrl,
+              status: "not-modified" as const,
+              changed: false,
+            }
+          }
+
+          await upsertFaviconCache(entry.hostname, result.favicon)
+          return {
+            hostname: entry.hostname,
+            sourceUrl: result.favicon.sourceUrl,
+            status: "updated" as const,
+            changed: result.favicon.contentHash !== entry.faviconHash,
+          }
+        } catch (error) {
+          console.error(
+            `[favicon-refresh] Failed to revalidate ${entry.hostname}:`,
+            error
+          )
+          await markFaviconCacheChecked(entry.hostname)
+          return {
+            hostname: entry.hostname,
+            error: error instanceof Error ? error.message : "Unknown error",
+            status: "error" as const,
+          }
+        }
+      })
+    )
+
+    const seedResults = await Promise.allSettled(
+      uncachedHostnames.map(async (hostname) => {
         try {
           const favicon = await resolveFavicon(hostname)
           await upsertFaviconCache(hostname, favicon)
           return {
             hostname,
             sourceUrl: favicon?.sourceUrl ?? null,
-            status: "success" as const,
+            status: "seeded" as const,
           }
         } catch (error) {
-          console.error(`[favicon-refresh] Failed to resolve ${hostname}:`, error)
+          console.error(`[favicon-refresh] Failed to seed ${hostname}:`, error)
           return {
             hostname,
             error: error instanceof Error ? error.message : "Unknown error",
@@ -75,20 +139,28 @@ export async function GET(request: Request) {
       })
     )
 
-    const succeeded = results.filter((r) => r.status === "fulfilled").length
-    const failed = results.filter((r) => r.status === "rejected").length
-    const details = results
+    const results = [...revalidationResults, ...seedResults]
+    const completed = results
       .map((r) => r.status === "fulfilled" ? r.value : null)
       .filter(Boolean)
 
-    const generatedCount = details.filter((d) => d?.sourceUrl?.startsWith("generated:")).length
+    const failed = results.filter((r) => r.status === "rejected").length
+    const generatedCount = completed.filter((d) => d?.sourceUrl?.startsWith("generated:")).length
+    const updatedCount = completed.filter((d) => d?.status === "updated").length
+    const notModifiedCount = completed.filter((d) => d?.status === "not-modified").length
+    const seededCount = completed.filter((d) => d?.status === "seeded").length
 
     return NextResponse.json({
-      refreshed: succeeded,
+      refreshed: completed.length,
       failed,
-      total: hostnames.length,
+      total: dueEntries.length + uncachedHostnames.length,
+      revalidated: dueEntries.length,
+      updated: updatedCount,
+      notModified: notModifiedCount,
+      seeded: seededCount,
       generated: generatedCount,
-      details: details.slice(0, 10), // Include first 10 for debugging
+      revalidateAfterHours: FAVICON_REVALIDATE_INTERVAL_HOURS,
+      details: completed.slice(0, 10),
     })
   } catch (error) {
     console.error("[favicon-refresh] Cron error:", error)

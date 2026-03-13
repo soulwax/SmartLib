@@ -25,7 +25,44 @@ export interface ResolvedFaviconPayload {
   contentType: string
   contentBase64: string
   contentHash: string
+  etag: string | null
+  lastModified: string | null
 }
+
+export interface FaviconRevalidationState {
+  sourceUrl?: string | null
+  etag?: string | null
+  lastModified?: string | null
+}
+
+export type RevalidatedFaviconResult =
+  | {
+      status: "modified"
+      favicon: ResolvedFaviconPayload
+    }
+  | {
+      status: "not-modified"
+      sourceUrl: string
+      etag: string | null
+      lastModified: string | null
+    }
+
+type FaviconFetchResult =
+  | {
+      status: "modified"
+      responseUrl: string
+      contentType: string
+      contentBase64: string
+      contentHash: string
+      etag: string | null
+      lastModified: string | null
+    }
+  | {
+      status: "not-modified"
+      responseUrl: string
+      etag: string | null
+      lastModified: string | null
+    }
 
 export function hostnameFromUrl(url: string): string | null {
   try {
@@ -43,6 +80,15 @@ export function uniqueHostnames(urls: string[]): string[] {
     if (h) seen.add(h)
   }
   return [...seen]
+}
+
+function normalizeCacheHeader(value: string | null): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  return trimmed.slice(0, 1024)
 }
 
 /**
@@ -66,7 +112,6 @@ function generateFallbackFavicon(hostname: string): ResolvedFaviconPayload {
   const colorIndex = parseInt(hash.substring(0, 2), 16) % FALLBACK_COLORS.length
   const bgColor = FALLBACK_COLORS[colorIndex]
 
-  // Create SVG
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" fill="${bgColor}" rx="8"/>
   <text x="32" y="32" text-anchor="middle" dominant-baseline="central"
@@ -81,6 +126,8 @@ function generateFallbackFavicon(hostname: string): ResolvedFaviconPayload {
     contentType: "image/svg+xml",
     contentBase64: buffer.toString("base64"),
     contentHash: createHash("sha256").update(buffer).digest("hex"),
+    etag: null,
+    lastModified: null,
   }
 }
 
@@ -130,9 +177,25 @@ function normalizeContentType(
   return null
 }
 
+function buildCandidateUrls(
+  hostname: string,
+  options?: { skipGoogleFallback?: boolean; preferredSourceUrl?: string | null }
+): string[] {
+  const candidates = [
+    options?.preferredSourceUrl ?? null,
+    `https://${hostname}/favicon.ico`,
+    ...(options?.skipGoogleFallback
+      ? []
+      : [fallbackFaviconUrlForHostname(hostname, DEFAULT_FAVICON_SIZE)]),
+  ].filter((url): url is string => Boolean(url))
+
+  return [...new Set(candidates)]
+}
+
 async function fetchFaviconAtUrl(
-  sourceUrl: string
-): Promise<Omit<ResolvedFaviconPayload, "sourceUrl"> | null> {
+  sourceUrl: string,
+  validation?: { etag?: string | null; lastModified?: string | null }
+): Promise<FaviconFetchResult | null> {
   try {
     const response = await fetch(sourceUrl, {
       method: "GET",
@@ -142,8 +205,23 @@ async function fetchFaviconAtUrl(
       cache: "no-store",
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; FaviconBot/1.0)",
+        ...(validation?.etag ? { "If-None-Match": validation.etag } : {}),
+        ...(validation?.lastModified ? { "If-Modified-Since": validation.lastModified } : {}),
       },
     })
+
+    const responseUrl = response.url || sourceUrl
+    const etag = normalizeCacheHeader(response.headers.get("etag"))
+    const lastModified = normalizeCacheHeader(response.headers.get("last-modified"))
+
+    if (response.status === 304) {
+      return {
+        status: "not-modified",
+        responseUrl,
+        etag: etag ?? validation?.etag ?? null,
+        lastModified: lastModified ?? validation?.lastModified ?? null,
+      }
+    }
 
     if (!response.ok) {
       if (response.status >= 500) {
@@ -163,7 +241,7 @@ async function fetchFaviconAtUrl(
 
     const contentType = normalizeContentType(
       response.headers.get("content-type"),
-      sourceUrl
+      responseUrl
     )
     if (!contentType) {
       console.warn(`[favicon] Invalid content type for ${sourceUrl}`)
@@ -177,9 +255,13 @@ async function fetchFaviconAtUrl(
     }
 
     return {
+      status: "modified",
+      responseUrl,
       contentType,
       contentBase64: bytes.toString("base64"),
       contentHash: createHash("sha256").update(bytes).digest("hex"),
+      etag,
+      lastModified,
     }
   } catch (error) {
     if (error instanceof Error) {
@@ -193,37 +275,98 @@ async function fetchFaviconAtUrl(
   }
 }
 
-/**
- * Resolve and download favicon image data for a hostname.
- * Falls back to a generated SVG if no favicon can be fetched.
- *
- * @param hostname - The hostname to resolve favicon for
- * @param options - Optional configuration
- * @returns ResolvedFaviconPayload or null if hostname is invalid
- */
-export async function resolveFavicon(
-  hostname: string,
-  options?: { skipGoogleFallback?: boolean }
+async function resolveFromCandidateUrls(
+  candidateUrls: string[],
+  hostname: string
 ): Promise<ResolvedFaviconPayload | null> {
-  if (!hostname) return null
-
-  const candidateUrls = [
-    `https://${hostname}/favicon.ico`,
-    ...(options?.skipGoogleFallback ? [] : [fallbackFaviconUrlForHostname(hostname, DEFAULT_FAVICON_SIZE)]),
-  ].filter((url): url is string => Boolean(url))
-
   for (const sourceUrl of candidateUrls) {
     const resolved = await fetchFaviconAtUrl(sourceUrl)
-    if (resolved) {
+    if (resolved?.status === "modified") {
       console.log(`[favicon] Successfully fetched from ${sourceUrl}`)
       return {
-        sourceUrl,
-        ...resolved,
+        sourceUrl: resolved.responseUrl,
+        contentType: resolved.contentType,
+        contentBase64: resolved.contentBase64,
+        contentHash: resolved.contentHash,
+        etag: resolved.etag,
+        lastModified: resolved.lastModified,
       }
     }
   }
 
-  // Generate fallback SVG if no favicon could be fetched
   console.log(`[favicon] Using generated SVG for ${hostname}`)
   return generateFallbackFavicon(hostname)
+}
+
+/**
+ * Resolve and download favicon image data for a hostname.
+ * Falls back to a generated SVG if no favicon can be fetched.
+ */
+export async function resolveFavicon(
+  hostname: string,
+  options?: { skipGoogleFallback?: boolean; preferredSourceUrl?: string | null }
+): Promise<ResolvedFaviconPayload | null> {
+  if (!hostname) return null
+
+  const candidateUrls = buildCandidateUrls(hostname, options)
+  return resolveFromCandidateUrls(candidateUrls, hostname)
+}
+
+export async function revalidateFavicon(
+  hostname: string,
+  current: FaviconRevalidationState,
+  options?: { skipGoogleFallback?: boolean }
+): Promise<RevalidatedFaviconResult | null> {
+  if (!hostname) {
+    return null
+  }
+
+  const preferredSourceUrl =
+    current.sourceUrl && !current.sourceUrl.startsWith("generated:")
+      ? current.sourceUrl
+      : null
+
+  if (preferredSourceUrl) {
+    const existing = await fetchFaviconAtUrl(preferredSourceUrl, {
+      etag: current.etag ?? null,
+      lastModified: current.lastModified ?? null,
+    })
+
+    if (existing?.status === "not-modified") {
+      return {
+        status: "not-modified",
+        sourceUrl: existing.responseUrl,
+        etag: existing.etag,
+        lastModified: existing.lastModified,
+      }
+    }
+
+    if (existing?.status === "modified") {
+      return {
+        status: "modified",
+        favicon: {
+          sourceUrl: existing.responseUrl,
+          contentType: existing.contentType,
+          contentBase64: existing.contentBase64,
+          contentHash: existing.contentHash,
+          etag: existing.etag,
+          lastModified: existing.lastModified,
+        },
+      }
+    }
+  }
+
+  const fallbackCandidates = buildCandidateUrls(hostname, {
+    skipGoogleFallback: options?.skipGoogleFallback,
+  }).filter((candidate) => candidate !== preferredSourceUrl)
+
+  const resolved = await resolveFromCandidateUrls(fallbackCandidates, hostname)
+  if (!resolved) {
+    return null
+  }
+
+  return {
+    status: "modified",
+    favicon: resolved,
+  }
 }

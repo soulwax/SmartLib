@@ -1,10 +1,27 @@
 import "server-only"
 
-import { inArray, sql } from "drizzle-orm"
+import { asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm"
 
 import { getDb } from "@/lib/db"
 import { faviconCache, resourceLinks } from "@/lib/db-schema"
 import type { ResolvedFaviconPayload } from "@/lib/favicon-service"
+
+export const FAVICON_REVALIDATE_INTERVAL_HOURS = 8
+const FAVICON_REVALIDATE_INTERVAL_MS =
+  FAVICON_REVALIDATE_INTERVAL_HOURS * 60 * 60 * 1000
+
+export interface FaviconCacheEntry {
+  hostname: string
+  faviconUrl: string | null
+  faviconContentType: string | null
+  faviconBase64: string | null
+  faviconHash: string | null
+  fetchEtag: string | null
+  fetchLastModified: string | null
+  lastCheckedAt: Date | string
+  lastChangedAt: Date | string
+  nextCheckAt: Date | string | null
+}
 
 function buildDataUri(
   contentType: string | null,
@@ -15,6 +32,10 @@ function buildDataUri(
   }
 
   return `data:${contentType};base64,${contentBase64}`
+}
+
+function buildNextCheckAt(base = new Date()): Date {
+  return new Date(base.getTime() + FAVICON_REVALIDATE_INTERVAL_MS)
 }
 
 /**
@@ -65,6 +86,8 @@ export async function upsertFaviconCache(
   const faviconContentType = favicon?.contentType ?? null
   const faviconBase64 = favicon?.contentBase64 ?? null
   const faviconHash = favicon?.contentHash ?? null
+  const fetchEtag = favicon?.etag ?? null
+  const fetchLastModified = favicon?.lastModified ?? null
 
   await db
     .insert(faviconCache)
@@ -74,8 +97,11 @@ export async function upsertFaviconCache(
       faviconContentType,
       faviconBase64,
       faviconHash,
+      fetchEtag,
+      fetchLastModified,
       lastCheckedAt: now,
       lastChangedAt: now,
+      nextCheckAt: buildNextCheckAt(now),
     })
     .onConflictDoUpdate({
       target: faviconCache.hostname,
@@ -84,7 +110,10 @@ export async function upsertFaviconCache(
         faviconContentType,
         faviconBase64,
         faviconHash,
+        fetchEtag,
+        fetchLastModified,
         lastCheckedAt: now,
+        nextCheckAt: buildNextCheckAt(now),
         // Only bump lastChangedAt when the image bytes changed.
         lastChangedAt: sql`
           CASE
@@ -95,6 +124,31 @@ export async function upsertFaviconCache(
         `,
       },
     })
+}
+
+export async function markFaviconCacheChecked(
+  hostname: string,
+  state?: {
+    sourceUrl?: string | null
+    etag?: string | null
+    lastModified?: string | null
+  }
+): Promise<void> {
+  const db = getDb()
+  const now = new Date()
+
+  await db
+    .update(faviconCache)
+    .set({
+      ...(state?.sourceUrl !== undefined ? { faviconUrl: state.sourceUrl } : {}),
+      ...(state?.etag !== undefined ? { fetchEtag: state.etag } : {}),
+      ...(state?.lastModified !== undefined
+        ? { fetchLastModified: state.lastModified }
+        : {}),
+      lastCheckedAt: now,
+      nextCheckAt: buildNextCheckAt(now),
+    })
+    .where(eq(faviconCache.hostname, hostname))
 }
 
 /**
@@ -127,73 +181,64 @@ export async function listHostnamesMissingStoredFavicons(
   return hostnames.filter((hostname) => !withStoredImage.has(hostname))
 }
 
-/**
- * Return hostnames derived from resource_links that either:
- *   - have no entry in favicon_cache yet, OR
- *   - were last checked more than `staleAfterHours` hours ago.
- *   - or do not yet have a persisted favicon image payload.
- *   - or have a generated fallback but should retry real favicons every 7 days.
- *
- * Hostname extraction is done in TypeScript to avoid complex SQL parsing.
- */
-export async function listStaleOrMissingHostnames(
-  staleAfterHours: number,
+export async function listDueFaviconCacheEntries(
   limit = 300
-): Promise<string[]> {
+): Promise<FaviconCacheEntry[]> {
   const db = getDb()
-  const threshold = new Date(Date.now() - staleAfterHours * 60 * 60 * 1000)
-  const generatedRetryThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // 7 days
+  const now = new Date()
 
-  // All distinct link URLs
+  return db
+    .select({
+      hostname: faviconCache.hostname,
+      faviconUrl: faviconCache.faviconUrl,
+      faviconContentType: faviconCache.faviconContentType,
+      faviconBase64: faviconCache.faviconBase64,
+      faviconHash: faviconCache.faviconHash,
+      fetchEtag: faviconCache.fetchEtag,
+      fetchLastModified: faviconCache.fetchLastModified,
+      lastCheckedAt: faviconCache.lastCheckedAt,
+      lastChangedAt: faviconCache.lastChangedAt,
+      nextCheckAt: faviconCache.nextCheckAt,
+    })
+    .from(faviconCache)
+    .where(
+      or(isNull(faviconCache.nextCheckAt), lte(faviconCache.nextCheckAt, now))
+    )
+    .orderBy(asc(faviconCache.nextCheckAt), asc(faviconCache.lastCheckedAt))
+    .limit(limit)
+}
+
+/**
+ * Return hostnames derived from resource_links that do not yet have any entry
+ * in favicon_cache. This backfills legacy rows that predate cache seeding.
+ */
+export async function listUncachedHostnames(limit = 300): Promise<string[]> {
+  const db = getDb()
+
   const linkRows = await db.selectDistinct({ url: resourceLinks.url }).from(resourceLinks)
 
-  // Extract unique hostnames in TypeScript
   const allHostnames = new Set<string>()
   for (const row of linkRows) {
     try {
       const hostname = new URL(row.url).hostname
-      if (hostname) allHostnames.add(hostname)
+      if (hostname) {
+        allHostnames.add(hostname)
+      }
     } catch {
       // skip malformed URLs
     }
   }
 
-  if (allHostnames.size === 0) return []
+  if (allHostnames.size === 0) {
+    return []
+  }
 
   const hostnameList = [...allHostnames]
-
-  // Find which are already fresh in the cache
   const cacheRows = await db
-    .select({
-      hostname: faviconCache.hostname,
-      lastCheckedAt: faviconCache.lastCheckedAt,
-      faviconBase64: faviconCache.faviconBase64,
-      faviconUrl: faviconCache.faviconUrl,
-    })
+    .select({ hostname: faviconCache.hostname })
     .from(faviconCache)
     .where(inArray(faviconCache.hostname, hostnameList))
 
-  const freshSet = new Set<string>()
-  for (const row of cacheRows) {
-    const checkedAt =
-      row.lastCheckedAt instanceof Date
-        ? row.lastCheckedAt
-        : new Date(row.lastCheckedAt)
-
-    const hasImageData = !!row.faviconBase64
-    const isGenerated = row.faviconUrl?.startsWith("generated:")
-
-    // Fresh if:
-    // - Has image data AND checked recently
-    // - OR is not generated and checked within normal threshold
-    // Generated favicons should be retried for real favicons less frequently
-    if (hasImageData && checkedAt >= threshold) {
-      freshSet.add(row.hostname)
-    } else if (isGenerated && checkedAt >= generatedRetryThreshold) {
-      // Don't retry generated favicons too often
-      freshSet.add(row.hostname)
-    }
-  }
-
-  return hostnameList.filter((h) => !freshSet.has(h)).slice(0, limit)
+  const cachedHostnames = new Set(cacheRows.map((row) => row.hostname))
+  return hostnameList.filter((hostname) => !cachedHostnames.has(hostname)).slice(0, limit)
 }

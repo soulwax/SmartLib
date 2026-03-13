@@ -882,8 +882,34 @@ export async function ensureSchema() {
     `;
 
     await sql`
+      ALTER TABLE favicon_cache
+      ADD COLUMN IF NOT EXISTS fetch_etag TEXT
+    `;
+
+    await sql`
+      ALTER TABLE favicon_cache
+      ADD COLUMN IF NOT EXISTS fetch_last_modified TEXT
+    `;
+
+    await sql`
+      ALTER TABLE favicon_cache
+      ADD COLUMN IF NOT EXISTS next_check_at TIMESTAMPTZ
+    `;
+
+    await sql`
+      UPDATE favicon_cache
+      SET next_check_at = COALESCE(next_check_at, last_checked_at + INTERVAL '8 hours')
+      WHERE next_check_at IS NULL
+    `;
+
+    await sql`
       CREATE INDEX IF NOT EXISTS favicon_cache_last_checked_at_idx
       ON favicon_cache (last_checked_at ASC)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS favicon_cache_next_check_at_idx
+      ON favicon_cache (next_check_at ASC)
     `;
   })();
 

@@ -373,10 +373,29 @@ interface TobyImportResponse extends ApiErrorResponse {
   workspace?: ResourceWorkspace;
   workspaceId?: string | null;
   organizationId?: string | null;
+  exactDuplicateCount?: number;
+  skippedExactDuplicates?: number;
+  duplicateSamples?: Array<{
+    url: string;
+    label: string;
+    matches: Array<{
+      resourceId: string;
+      category: string;
+      linkLabel: string;
+      linkUrl: string;
+    }>;
+  }>;
   importedLists?: number;
   importedCards?: number;
   importedResources?: number;
   failed?: number;
+}
+
+interface TobyImportPreviewState {
+  importedLists: number;
+  importedCards: number;
+  exactDuplicateCount: number;
+  duplicateSamples: NonNullable<TobyImportResponse["duplicateSamples"]>;
 }
 
 interface MoveItemResponse extends ApiErrorResponse {
@@ -944,6 +963,11 @@ export default function LibraryPageClient({
   const [tobyImportWorkspaceName, setTobyImportWorkspaceName] = useState(
     DEFAULT_TOBY_WORKSPACE_NAME,
   );
+  const [tobyImportSkipExactDuplicates, setTobyImportSkipExactDuplicates] =
+    useState(true);
+  const [isTobyImportPreviewing, setIsTobyImportPreviewing] = useState(false);
+  const [tobyImportPreview, setTobyImportPreview] =
+    useState<TobyImportPreviewState | null>(null);
   const [aiInboxItems, setAiInboxItems] = useState<AiInboxItem[]>([]);
   const [aiInboxUseAi, setAiInboxUseAi] = useState(true);
   const [isAiInboxAnalyzing, setIsAiInboxAnalyzing] = useState(false);
@@ -4529,6 +4553,8 @@ export default function LibraryPageClient({
 
     setTobyImportCreateWorkspace(!resolvedActiveWorkspaceId && canCreateWorkspaces);
     setTobyImportWorkspaceName(suggestTobyWorkspaceName(tobyImportFileName));
+    setTobyImportSkipExactDuplicates(true);
+    setTobyImportPreview(null);
     setTobyImportOpen(true);
   }, [
     canCreateWorkspaces,
@@ -4552,6 +4578,7 @@ export default function LibraryPageClient({
         setTobyImportRawInput(content);
         setTobyImportFileName(file.name);
         setTobyImportWorkspaceName(suggestTobyWorkspaceName(file.name));
+        setTobyImportPreview(null);
       } catch {
         toast.error("Could not read Toby file", {
           description: "The selected file could not be loaded.",
@@ -4560,6 +4587,96 @@ export default function LibraryPageClient({
     },
     [],
   );
+
+  const buildTobyImportPayload = useCallback(
+    (previewOnly: boolean) => ({
+      organizationId: resolvedActiveOrganizationId,
+      workspaceId: tobyImportCreateWorkspace
+        ? undefined
+        : resolvedActiveWorkspaceId,
+      createWorkspace: tobyImportCreateWorkspace,
+      workspaceName: tobyImportCreateWorkspace
+        ? tobyImportWorkspaceName.trim()
+        : undefined,
+      previewOnly,
+      skipExactDuplicates: tobyImportSkipExactDuplicates,
+      content: tobyImportRawInput,
+    }),
+    [
+      resolvedActiveOrganizationId,
+      resolvedActiveWorkspaceId,
+      tobyImportCreateWorkspace,
+      tobyImportRawInput,
+      tobyImportSkipExactDuplicates,
+      tobyImportWorkspaceName,
+    ],
+  );
+
+  const handlePreviewTobyImport = useCallback(async () => {
+    if (!canManageResources) {
+      return;
+    }
+
+    if (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) {
+      toast.error("Workspace unavailable", {
+        description:
+          "The selected workspace is no longer available. Refresh the library and choose a current workspace.",
+      });
+      return;
+    }
+
+    if (tobyImportRawInput.trim().length === 0) {
+      toast.error("No Toby JSON provided", {
+        description: "Upload a Toby JSON export or paste its content first.",
+      });
+      return;
+    }
+
+    if (tobyImportCreateWorkspace && tobyImportWorkspaceName.trim().length === 0) {
+      toast.error("Workspace name required", {
+        description: "Enter a name for the new workspace before previewing the import.",
+      });
+      return;
+    }
+
+    setIsTobyImportPreviewing(true);
+    try {
+      const response = await fetch("/api/import/toby", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(buildTobyImportPayload(true)),
+      });
+      const payload = await readJson<TobyImportResponse>(response);
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to preview Toby JSON import.");
+      }
+
+      setTobyImportPreview({
+        importedLists: payload?.importedLists ?? 0,
+        importedCards: payload?.importedCards ?? 0,
+        exactDuplicateCount: payload?.exactDuplicateCount ?? 0,
+        duplicateSamples: payload?.duplicateSamples ?? [],
+      });
+    } catch (error) {
+      toast.error("Preview failed", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not analyze the Toby import.",
+      });
+    } finally {
+      setIsTobyImportPreviewing(false);
+    }
+  }, [
+    buildTobyImportPayload,
+    canManageResources,
+    resolvedActiveWorkspaceId,
+    tobyImportCreateWorkspace,
+    tobyImportRawInput,
+    tobyImportWorkspaceName,
+  ]);
 
   const handleImportTobyJson = useCallback(async () => {
     if (!canManageResources) {
@@ -4595,17 +4712,7 @@ export default function LibraryPageClient({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          organizationId: resolvedActiveOrganizationId,
-          workspaceId: tobyImportCreateWorkspace
-            ? undefined
-            : resolvedActiveWorkspaceId,
-          createWorkspace: tobyImportCreateWorkspace,
-          workspaceName: tobyImportCreateWorkspace
-            ? tobyImportWorkspaceName.trim()
-            : undefined,
-          content: tobyImportRawInput,
-        }),
+        body: JSON.stringify(buildTobyImportPayload(false)),
       });
       const payload = await readJson<TobyImportResponse>(response);
       if (!response.ok) {
@@ -4630,15 +4737,18 @@ export default function LibraryPageClient({
       setTobyImportFileName(null);
       setTobyImportCreateWorkspace(false);
       setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
+      setTobyImportSkipExactDuplicates(true);
+      setTobyImportPreview(null);
 
       const importedResources = payload?.importedResources ?? 0;
       const importedCards = payload?.importedCards ?? importedResources;
       const importedLists = payload?.importedLists ?? 0;
       const failed = payload?.failed ?? 0;
+      const skippedExactDuplicates = payload?.skippedExactDuplicates ?? 0;
       const importedWorkspaceName = payload?.workspace?.name;
 
       toast.success("Toby import complete", {
-        description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${importedWorkspaceName ? ` into ${importedWorkspaceName}` : ""}${failed > 0 ? `, ${failed} failed.` : "."}`,
+        description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${importedWorkspaceName ? ` into ${importedWorkspaceName}` : ""}${skippedExactDuplicates > 0 ? `, ${skippedExactDuplicates} exact duplicate(s) skipped` : ""}${failed > 0 ? `, ${failed} failed.` : "."}`,
       });
     } catch (error) {
       toast.error("Toby import failed", {
@@ -4653,11 +4763,11 @@ export default function LibraryPageClient({
   }, [
     canCreateWorkspaces,
     canManageResources,
+    buildTobyImportPayload,
     loadLibrarySnapshot,
     resolvedActiveOrganizationId,
     resolvedActiveWorkspaceId,
     tobyImportCreateWorkspace,
-    tobyImportRawInput,
     tobyImportWorkspaceName,
   ]);
 
@@ -6929,6 +7039,8 @@ export default function LibraryPageClient({
             setTobyImportFileName(null);
             setTobyImportCreateWorkspace(false);
             setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
+            setTobyImportSkipExactDuplicates(true);
+            setTobyImportPreview(null);
           }
         }}
       >
@@ -6956,7 +7068,10 @@ export default function LibraryPageClient({
                 </div>
                 <Switch
                   checked={tobyImportCreateWorkspace}
-                  onCheckedChange={setTobyImportCreateWorkspace}
+                  onCheckedChange={(checked) => {
+                    setTobyImportCreateWorkspace(checked);
+                    setTobyImportPreview(null);
+                  }}
                   disabled={!canCreateWorkspaces || !resolvedActiveWorkspaceId}
                   aria-label="Create a new workspace for this import"
                 />
@@ -6968,9 +7083,10 @@ export default function LibraryPageClient({
                   <Input
                     id="toby-workspace-name"
                     value={tobyImportWorkspaceName}
-                    onChange={(event) =>
-                      setTobyImportWorkspaceName(event.target.value)
-                    }
+                    onChange={(event) => {
+                      setTobyImportWorkspaceName(event.target.value);
+                      setTobyImportPreview(null);
+                    }}
                     placeholder={DEFAULT_TOBY_WORKSPACE_NAME}
                     maxLength={80}
                     disabled={isTobyImporting}
@@ -7012,7 +7128,10 @@ export default function LibraryPageClient({
               <Textarea
                 id="toby-json-input"
                 value={tobyImportRawInput}
-                onChange={(event) => setTobyImportRawInput(event.target.value)}
+                onChange={(event) => {
+                  setTobyImportRawInput(event.target.value);
+                  setTobyImportPreview(null);
+                }}
                 placeholder='{"version":3,"lists":[...]}'
                 rows={14}
                 disabled={isTobyImporting}
@@ -7020,6 +7139,58 @@ export default function LibraryPageClient({
               <p className="text-xs text-muted-foreground">
                 Toby lists become categories. Toby cards become resource cards.
               </p>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border/70 bg-card/50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Skip exact duplicates
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Ignore links that already exist in the target workspace.
+                  </p>
+                </div>
+                <Switch
+                  checked={tobyImportSkipExactDuplicates}
+                  onCheckedChange={setTobyImportSkipExactDuplicates}
+                  disabled={isTobyImporting || tobyImportCreateWorkspace}
+                  aria-label="Skip exact duplicate links during Toby import"
+                />
+              </div>
+
+              {tobyImportPreview ? (
+                <div className="space-y-2 rounded-md border border-border/60 bg-background/40 p-3">
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>{tobyImportPreview.importedLists} list(s)</span>
+                    <span>{tobyImportPreview.importedCards} card(s)</span>
+                    <span>
+                      {tobyImportPreview.exactDuplicateCount} exact duplicate(s)
+                    </span>
+                  </div>
+
+                  {tobyImportPreview.duplicateSamples.length > 0 ? (
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      {tobyImportPreview.duplicateSamples.map((sample) => (
+                        <p key={`${sample.url}|${sample.label}`}>
+                          <strong className="text-foreground">{sample.label}</strong>
+                          {` in `}
+                          {sample.matches
+                            .map((match) => match.category)
+                            .filter((category, index, values) =>
+                              values.indexOf(category) === index,
+                            )
+                            .join(", ")}
+                        </p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No exact duplicates found for this import.
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             <div className="flex justify-end gap-2">
@@ -7030,6 +7201,21 @@ export default function LibraryPageClient({
                 disabled={isTobyImporting}
               >
                 Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handlePreviewTobyImport()}
+                disabled={
+                  isTobyImporting ||
+                  isTobyImportPreviewing ||
+                  (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) ||
+                  (tobyImportCreateWorkspace &&
+                    tobyImportWorkspaceName.trim().length === 0) ||
+                  tobyImportRawInput.trim().length === 0
+                }
+              >
+                {isTobyImportPreviewing ? "Previewing..." : "Preview"}
               </Button>
               <Button
                 type="button"

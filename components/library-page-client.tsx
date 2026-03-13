@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import Link from "next/link";
 import { signIn, signOut, useSession } from "next-auth/react";
 
@@ -103,6 +110,7 @@ import {
   Search,
   Settings2,
   Trash2,
+  Upload,
   UserPlus,
   WandSparkles,
   Zap,
@@ -359,6 +367,13 @@ interface DeleteCategoryResponse extends ApiErrorResponse {
 interface ResourceResponse extends ApiErrorResponse {
   mode?: "database" | "mock";
   resource?: ResourceCard;
+}
+
+interface TobyImportResponse extends ApiErrorResponse {
+  importedLists?: number;
+  importedCards?: number;
+  importedResources?: number;
+  failed?: number;
 }
 
 interface MoveItemResponse extends ApiErrorResponse {
@@ -901,10 +916,16 @@ export default function LibraryPageClient({
   const [modalOpen, setModalOpen] = useState(false);
   const [aiInboxOpen, setAiInboxOpen] = useState(false);
   const [aiInboxRawInput, setAiInboxRawInput] = useState("");
+  const [tobyImportOpen, setTobyImportOpen] = useState(false);
+  const [tobyImportRawInput, setTobyImportRawInput] = useState("");
+  const [tobyImportFileName, setTobyImportFileName] = useState<string | null>(
+    null,
+  );
   const [aiInboxItems, setAiInboxItems] = useState<AiInboxItem[]>([]);
   const [aiInboxUseAi, setAiInboxUseAi] = useState(true);
   const [isAiInboxAnalyzing, setIsAiInboxAnalyzing] = useState(false);
   const [isAiInboxImporting, setIsAiInboxImporting] = useState(false);
+  const [isTobyImporting, setIsTobyImporting] = useState(false);
   const [isAiInboxMerging, setIsAiInboxMerging] = useState(false);
   const [isAiInboxRenamingCategories, setIsAiInboxRenamingCategories] =
     useState(false);
@@ -4465,6 +4486,117 @@ export default function LibraryPageClient({
     setAiInboxOpen(true);
   }, [activeWorkspaceId, canManageResources, canUseAiFeatures]);
 
+  const handleOpenTobyImport = useCallback(() => {
+    if (!canManageResources) {
+      toast.error("Insufficient permissions", {
+        description: "You do not have access to import resource cards.",
+      });
+      return;
+    }
+
+    if (!activeWorkspaceId) {
+      toast.error("Workspace unavailable", {
+        description: "Select a workspace before importing Toby JSON.",
+      });
+      return;
+    }
+
+    setTobyImportOpen(true);
+  }, [activeWorkspaceId, canManageResources]);
+
+  const handleSelectTobyJsonFile = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const input = event.currentTarget;
+      const file = input.files?.[0] ?? null;
+      input.value = "";
+
+      if (!file) {
+        return;
+      }
+
+      try {
+        const content = await file.text();
+        setTobyImportRawInput(content);
+        setTobyImportFileName(file.name);
+      } catch {
+        toast.error("Could not read Toby file", {
+          description: "The selected file could not be loaded.",
+        });
+      }
+    },
+    [],
+  );
+
+  const handleImportTobyJson = useCallback(async () => {
+    if (!canManageResources) {
+      return;
+    }
+
+    if (!activeWorkspaceId) {
+      toast.error("Workspace unavailable", {
+        description: "Select a workspace before importing Toby JSON.",
+      });
+      return;
+    }
+
+    if (tobyImportRawInput.trim().length === 0) {
+      toast.error("No Toby JSON provided", {
+        description: "Upload a Toby JSON export or paste its content first.",
+      });
+      return;
+    }
+
+    setIsTobyImporting(true);
+    try {
+      const response = await fetch("/api/import/toby", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: activeWorkspaceId,
+          content: tobyImportRawInput,
+        }),
+      });
+      const payload = await readJson<TobyImportResponse>(response);
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to import Toby JSON.");
+      }
+
+      await loadLibrarySnapshot({
+        organizationId: activeOrganizationId,
+        workspaceId: activeWorkspaceId,
+      });
+      setTobyImportOpen(false);
+      setTobyImportRawInput("");
+      setTobyImportFileName(null);
+
+      const importedResources = payload?.importedResources ?? 0;
+      const importedCards = payload?.importedCards ?? importedResources;
+      const importedLists = payload?.importedLists ?? 0;
+      const failed = payload?.failed ?? 0;
+
+      toast.success("Toby import complete", {
+        description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${failed > 0 ? `, ${failed} failed.` : "."}`,
+      });
+    } catch (error) {
+      toast.error("Toby import failed", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not import the provided Toby JSON.",
+      });
+    } finally {
+      setIsTobyImporting(false);
+    }
+  }, [
+    activeOrganizationId,
+    activeWorkspaceId,
+    canManageResources,
+    loadLibrarySnapshot,
+    tobyImportRawInput,
+  ]);
+
   const handleAnalyzeAiInbox = useCallback(async () => {
     if (!canManageResources) {
       return;
@@ -5699,6 +5831,18 @@ export default function LibraryPageClient({
             <span className="ml-2 hidden sm:inline">AI Inbox</span>
           </Button>
 
+          {canManageResources ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleOpenTobyImport}
+              disabled={isResourcesLoading || isTobyImporting || !activeWorkspaceId}
+            >
+              <Upload className="h-4 w-4" />
+              <span className="ml-2 hidden sm:inline">Import Toby</span>
+            </Button>
+          ) : null}
+
           <Button
             variant="outline"
             size="sm"
@@ -5889,6 +6033,20 @@ export default function LibraryPageClient({
                 aria-label="Sign in"
               >
                 <LogIn className="h-4 w-4" />
+              </Button>
+            ) : null}
+
+            {canManageResources ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={handleOpenTobyImport}
+                disabled={isTobyImporting || !activeWorkspaceId}
+                aria-label="Import Toby JSON"
+              >
+                <Upload className="h-4 w-4" />
               </Button>
             ) : null}
 
@@ -6622,6 +6780,13 @@ export default function LibraryPageClient({
                   <ClipboardPaste className="mr-2 h-4 w-4" />
                   Paste URL from clipboard
                 </ContextMenuItem>
+                <ContextMenuItem
+                  disabled={isTobyImporting || !activeWorkspaceId}
+                  onSelect={handleOpenTobyImport}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Import Toby JSON
+                </ContextMenuItem>
               </>
             ) : null}
             {canManageCategories ? (
@@ -6676,6 +6841,90 @@ export default function LibraryPageClient({
           </ContextMenuContent>
         </ContextMenu>
       </div>
+
+      <Dialog
+        open={tobyImportOpen}
+        onOpenChange={(open) => {
+          if (isTobyImporting) {
+            return;
+          }
+
+          setTobyImportOpen(open);
+          if (!open) {
+            setTobyImportRawInput("");
+            setTobyImportFileName(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Import Toby JSON</DialogTitle>
+            <DialogDescription>
+              Import a Toby JSON export into your active workspace. Each Toby
+              list becomes a category, and each Toby card becomes one resource
+              card with a single saved link.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="toby-json-file">JSON file</Label>
+              <Input
+                id="toby-json-file"
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => {
+                  void handleSelectTobyJsonFile(event);
+                }}
+                disabled={isTobyImporting}
+              />
+              <p className="text-xs text-muted-foreground">
+                {tobyImportFileName
+                  ? `Loaded file: ${tobyImportFileName}`
+                  : "Upload a Toby export or paste the JSON below."}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="toby-json-input">Toby JSON</Label>
+              <Textarea
+                id="toby-json-input"
+                value={tobyImportRawInput}
+                onChange={(event) => setTobyImportRawInput(event.target.value)}
+                placeholder='{"version":3,"lists":[...]}'
+                rows={14}
+                disabled={isTobyImporting}
+              />
+              <p className="text-xs text-muted-foreground">
+                Import target: {workspaceDisplayName}. Custom Toby titles become
+                link labels, and custom descriptions become notes.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setTobyImportOpen(false)}
+                disabled={isTobyImporting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void handleImportTobyJson()}
+                disabled={
+                  isTobyImporting ||
+                  !activeWorkspaceId ||
+                  tobyImportRawInput.trim().length === 0
+                }
+              >
+                {isTobyImporting ? "Importing..." : "Import Toby JSON"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={aiPastePromptOpen}

@@ -76,6 +76,38 @@ interface AuditLogsResponse extends ApiErrorResponse {
   logs?: ResourceAuditLogEntry[]
 }
 
+interface FaviconAdminEntry {
+  hostname: string
+  sourceUrl: string | null
+  sourceKind: "site" | "google" | "generated" | "unknown"
+  hasStoredImage: boolean
+  hasValidators: boolean
+  lastCheckedAt: string | null
+  lastChangedAt: string | null
+  nextCheckAt: string | null
+}
+
+interface FaviconAdminStats {
+  trackedHostnames: number
+  cachedHostnames: number
+  uncachedHostnames: number
+  coveragePercent: number
+  dueNowCount: number
+  storedPayloadCount: number
+  generatedFallbackCount: number
+  validatorBackedCount: number
+  checkedLastWindowCount: number
+  changedLast24HoursCount: number
+  lastCheckedAt: string | null
+}
+
+interface FaviconAdminResponse extends ApiErrorResponse {
+  revalidateAfterHours?: number
+  stats?: FaviconAdminStats
+  dueEntries?: FaviconAdminEntry[]
+  recentChecks?: FaviconAdminEntry[]
+}
+
 interface PromoteAdminResponse extends ApiErrorResponse {
   user?: {
     id: string
@@ -137,6 +169,32 @@ function truncateUuid(id: string): string {
   return id.slice(0, 8) + "…"
 }
 
+function formatSourceKind(sourceKind: FaviconAdminEntry["sourceKind"]): string {
+  switch (sourceKind) {
+    case "site":
+      return "Site"
+    case "google":
+      return "Google"
+    case "generated":
+      return "Generated"
+    default:
+      return "Unknown"
+  }
+}
+
+function sourceKindBadgeClass(sourceKind: FaviconAdminEntry["sourceKind"]): string {
+  switch (sourceKind) {
+    case "site":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
+    case "google":
+      return "border-sky-500/30 bg-sky-500/10 text-sky-600"
+    case "generated":
+      return "border-amber-500/30 bg-amber-500/10 text-amber-600"
+    default:
+      return ""
+  }
+}
+
 async function copyToClipboard(value: string) {
   try {
     await navigator.clipboard.writeText(value)
@@ -176,10 +234,12 @@ export default function AdminPage() {
   const [dataMode, setDataMode] = useState<"database" | "mock" | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isAuditLoading, setIsAuditLoading] = useState(true)
+  const [isFaviconLoading, setIsFaviconLoading] = useState(true)
   const [actionResourceId, setActionResourceId] = useState<string | null>(null)
   const [isBulkActing, setIsBulkActing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [auditError, setAuditError] = useState<string | null>(null)
+  const [faviconError, setFaviconError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
   const [sortOption, setSortOption] = useState<SortOption>("created-newest")
@@ -191,6 +251,10 @@ export default function AdminPage() {
   const [activeSection, setActiveSection] = useState<AdminSection>("overview")
   const [promoteIdentifier, setPromoteIdentifier] = useState("")
   const [isPromotingAdmin, setIsPromotingAdmin] = useState(false)
+  const [faviconStats, setFaviconStats] = useState<FaviconAdminStats | null>(null)
+  const [faviconDueEntries, setFaviconDueEntries] = useState<FaviconAdminEntry[]>([])
+  const [faviconRecentChecks, setFaviconRecentChecks] = useState<FaviconAdminEntry[]>([])
+  const [faviconRevalidateHours, setFaviconRevalidateHours] = useState<number>(8)
 
   const isAdmin = Boolean(session?.user?.isAdmin)
   const isFirstAdmin = Boolean(session?.user?.isFirstAdmin)
@@ -341,15 +405,37 @@ export default function AdminPage() {
     }
   }, [])
 
+  const fetchFaviconHealth = useCallback(async () => {
+    setIsFaviconLoading(true)
+    setFaviconError(null)
+    try {
+      const response = await fetch("/api/admin/favicon-cache", { cache: "no-store" })
+      const payload = await readJson<FaviconAdminResponse>(response)
+      if (!response.ok) throw new Error(payload?.error ?? "Failed to load favicon cache snapshot.")
+      setFaviconStats(payload?.stats ?? null)
+      setFaviconDueEntries(payload?.dueEntries ?? [])
+      setFaviconRecentChecks(payload?.recentChecks ?? [])
+      setFaviconRevalidateHours(payload?.revalidateAfterHours ?? 8)
+    } catch (error) {
+      setFaviconError(
+        error instanceof Error ? error.message : "Could not load favicon cache snapshot."
+      )
+    } finally {
+      setIsFaviconLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (status !== "authenticated" || !isAdmin) {
       setIsLoading(false)
       setIsAuditLoading(false)
+      setIsFaviconLoading(false)
       return
     }
     void fetchResources()
     void fetchAuditLogs()
-  }, [fetchAuditLogs, fetchResources, isAdmin, status])
+    void fetchFaviconHealth()
+  }, [fetchAuditLogs, fetchFaviconHealth, fetchResources, isAdmin, status])
 
   const requestArchive = useCallback(async (resourceId: string) => {
     const response = await fetch(`/api/resources/${resourceId}`, { method: "DELETE" })
@@ -697,6 +783,207 @@ export default function AdminPage() {
                   </CardContent>
                 </Card>
               </div>
+
+              <Card>
+                <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+                  <div>
+                    <CardTitle className="text-sm">Favicon Cache Health</CardTitle>
+                    <CardDescription>
+                      Neon-backed cache coverage with lazy {faviconRevalidateHours}-hour revalidation.
+                    </CardDescription>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void fetchFaviconHealth()}
+                    disabled={isFaviconLoading}
+                  >
+                    {isFaviconLoading ? "Refreshing..." : "Refresh"}
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {faviconError ? (
+                    <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                      {faviconError}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+                        <div className="rounded-lg border border-border/70 bg-background/40 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Coverage
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold">
+                            {faviconStats?.coveragePercent ?? 0}%
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {faviconStats?.cachedHostnames ?? 0} / {faviconStats?.trackedHostnames ?? 0} tracked
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/70 bg-background/40 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Due now
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold">
+                            {faviconStats?.dueNowCount ?? 0}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {faviconStats?.checkedLastWindowCount ?? 0} checked in last window
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/70 bg-background/40 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Stored bytes
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold">
+                            {faviconStats?.storedPayloadCount ?? 0}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {faviconStats?.validatorBackedCount ?? 0} validator-backed
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/70 bg-background/40 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Generated
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold">
+                            {faviconStats?.generatedFallbackCount ?? 0}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {faviconStats?.uncachedHostnames ?? 0} still uncached
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/70 bg-background/40 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Changed 24h
+                          </p>
+                          <p className="mt-2 text-2xl font-semibold">
+                            {faviconStats?.changedLast24HoursCount ?? 0}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Last check {formatTs(faviconStats?.lastCheckedAt)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 xl:grid-cols-2">
+                        <Card className="border-border/70">
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm">Due for Revalidation</CardTitle>
+                            <CardDescription>
+                              Oldest rows waiting for the next conditional check.
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="p-0">
+                            {faviconDueEntries.length === 0 ? (
+                              <div className="px-6 py-5 text-sm text-muted-foreground">
+                                No favicon rows are currently due.
+                              </div>
+                            ) : (
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Hostname</TableHead>
+                                    <TableHead className="w-28">Source</TableHead>
+                                    <TableHead className="w-20">Bytes</TableHead>
+                                    <TableHead className="w-24">Validators</TableHead>
+                                    <TableHead className="w-40">Last checked</TableHead>
+                                    <TableHead className="w-40">Next check</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {faviconDueEntries.map((entry) => (
+                                    <TableRow key={`due-${entry.hostname}`}>
+                                      <TableCell>
+                                        <div className="font-medium">{entry.hostname}</div>
+                                      </TableCell>
+                                      <TableCell>
+                                        <Badge
+                                          variant="outline"
+                                          className={sourceKindBadgeClass(entry.sourceKind)}
+                                        >
+                                          {formatSourceKind(entry.sourceKind)}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {entry.hasStoredImage ? "stored" : "url-only"}
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {entry.hasValidators ? "yes" : "no"}
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {formatTs(entry.lastCheckedAt)}
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {formatTs(entry.nextCheckAt)}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            )}
+                          </CardContent>
+                        </Card>
+
+                        <Card className="border-border/70">
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm">Recently Checked</CardTitle>
+                            <CardDescription>
+                              Most recently revalidated favicon rows.
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="p-0">
+                            {faviconRecentChecks.length === 0 ? (
+                              <div className="px-6 py-5 text-sm text-muted-foreground">
+                                No favicon rows have been checked yet.
+                              </div>
+                            ) : (
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Hostname</TableHead>
+                                    <TableHead className="w-28">Source</TableHead>
+                                    <TableHead className="w-24">Validators</TableHead>
+                                    <TableHead className="w-40">Last checked</TableHead>
+                                    <TableHead className="w-40">Last changed</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {faviconRecentChecks.map((entry) => (
+                                    <TableRow key={`recent-${entry.hostname}`}>
+                                      <TableCell>
+                                        <div className="font-medium">{entry.hostname}</div>
+                                      </TableCell>
+                                      <TableCell>
+                                        <Badge
+                                          variant="outline"
+                                          className={sourceKindBadgeClass(entry.sourceKind)}
+                                        >
+                                          {formatSourceKind(entry.sourceKind)}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {entry.hasValidators ? "yes" : "no"}
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {formatTs(entry.lastCheckedAt)}
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {formatTs(entry.lastChangedAt)}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            )}
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
 
               {/* Recent audit events */}
               {auditLogs.length > 0 && (

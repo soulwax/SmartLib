@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   LINK_ITEM_DRAG_MIME,
   parseLinkItemDragPayload,
@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -35,9 +36,11 @@ import {
   ClipboardPaste,
   Copy,
   FolderPlus,
+  Search,
   Pencil,
   Settings,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { LucideIcon } from "lucide-react";
@@ -133,6 +136,7 @@ export function CategorySidebar({
   roleHint,
   isLoading = false,
 }: CategorySidebarProps) {
+  const [categoryFilter, setCategoryFilter] = useState("");
   const copyText = useCallback(async (value: string, label: string) => {
     if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
       toast.error("Clipboard unavailable");
@@ -151,6 +155,24 @@ export function CategorySidebar({
     "All",
     ...categories.filter((category) => category !== "All"),
   ];
+  const normalizedCategoryFilter = categoryFilter.trim().toLowerCase();
+  const filteredCategoryItems = useMemo(() => {
+    if (!normalizedCategoryFilter) {
+      return categoryItems;
+    }
+
+    return categoryItems.filter((category) => {
+      if (category === "All") {
+        return true;
+      }
+
+      const symbol = categorySymbols[category];
+      return (
+        category.toLowerCase().includes(normalizedCategoryFilter) ||
+        symbol?.toLowerCase().includes(normalizedCategoryFilter)
+      );
+    });
+  }, [categoryItems, categorySymbols, normalizedCategoryFilter]);
   const showLoadingState = isLoading && categories.length === 0;
   const readDraggedLinkItem = useCallback(
     (event: React.DragEvent<HTMLElement>) =>
@@ -191,6 +213,31 @@ export function CategorySidebar({
             {roleHint ? <p className="section-title-hint">{roleHint}</p> : null}
           </div>
         ) : null}
+        {!showLoadingState && categoryItems.length > 0 ? (
+          <div className="mb-3 px-1">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
+              <Input
+                type="search"
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+                placeholder="Filter categories"
+                className="h-9 rounded-xl border-border/70 bg-secondary/40 pl-9 pr-9 text-sm shadow-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0"
+                aria-label="Filter categories"
+              />
+              {categoryFilter ? (
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter("")}
+                  className="absolute right-2 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label="Clear category filter"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         {showLoadingState
           ? Array.from({ length: 7 }, (_, index) => (
               <div
@@ -202,7 +249,8 @@ export function CategorySidebar({
                 <Skeleton className="h-3 w-8 shrink-0 rounded-sm" />
               </div>
             ))
-          : categoryItems.map((cat) => {
+          : filteredCategoryItems.length > 0
+            ? filteredCategoryItems.map((cat) => {
               const Icon = resolveCategoryIcon(cat);
               const isActive = activeCategory === cat;
               const isEditableByOwner =
@@ -357,7 +405,15 @@ export function CategorySidebar({
                   </ContextMenuContent>
                 </ContextMenu>
               );
-            })}
+            })
+            : (
+              <div className="rounded-xl border border-dashed border-border/70 bg-secondary/25 px-3 py-4 text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">No category matches</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Try a shorter filter or clear it to see all categories.
+                </p>
+              </div>
+            )}
         </div>
       </ScrollArea>
 

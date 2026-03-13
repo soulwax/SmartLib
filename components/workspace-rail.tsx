@@ -59,6 +59,7 @@ export function WorkspaceRail({
 }: WorkspaceRailProps) {
   const isVertical = orientation === "vertical";
   const workspaceButtonSizeClass = compactMode ? "h-8 w-8" : "h-9 w-9";
+  const renderGroupedRail = isVertical && !compactMode;
 
   const sortedWorkspaces = useMemo(() => {
     return [...workspaces].sort((left, right) => {
@@ -73,93 +74,209 @@ export function WorkspaceRail({
       });
     });
   }, [workspaces]);
+  const workspaceGroups = useMemo(() => {
+    const shared = sortedWorkspaces.filter((workspace) => !workspace.ownerUserId);
+    const personal = sortedWorkspaces.filter((workspace) => workspace.ownerUserId);
+
+    return [
+      {
+        id: "shared",
+        label: "Shared",
+        workspaces: shared,
+      },
+      {
+        id: "personal",
+        label: "Mine",
+        workspaces: personal,
+      },
+    ].filter((group) => group.workspaces.length > 0);
+  }, [sortedWorkspaces]);
   const showLoadingState = isLoading && sortedWorkspaces.length === 0;
   const skeletonCount = isVertical ? 5 : 6;
+  const totalWorkspaceCount = sortedWorkspaces.length;
 
   return (
     <div className={cn("flex h-full flex-col", !isVertical ? "w-full" : undefined)}>
+      {renderGroupedRail ? (
+        <div className="border-b border-border/70 px-2 py-3 text-center">
+          <p className="text-[0.6rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/75">
+            Collections
+          </p>
+          <div className="mt-2 inline-flex items-center rounded-full border border-border/70 bg-secondary/60 px-2 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            {totalWorkspaceCount}
+          </div>
+        </div>
+      ) : null}
+
       <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
         <div
           className={cn(
-            compactMode ? "flex gap-1 p-1.5" : "flex gap-1.5 p-2",
-            isVertical ? "h-full flex-col items-center" : "items-center",
+            renderGroupedRail
+              ? "flex flex-col gap-4 px-2 py-3"
+              : compactMode
+                ? "flex gap-1 p-1.5"
+                : "flex gap-1.5 p-2",
+            isVertical && !renderGroupedRail ? "h-full flex-col items-center" : undefined,
+            !isVertical ? "items-center" : undefined,
           )}
         >
-          {showLoadingState
-            ? Array.from({ length: skeletonCount }, (_, index) => (
-                <Skeleton
-                  key={`workspace-skeleton-${index}`}
-                  className={cn(
-                    workspaceButtonSizeClass,
-                    "rounded-full",
-                    !isVertical ? "shrink-0" : undefined,
-                  )}
-                />
-              ))
-            : sortedWorkspaces.map((workspace) => {
-                const isActive = workspace.id === activeWorkspaceId;
-                const badge = workspaceBadge(workspace.name);
-                const count = resourceCountsByWorkspace[workspace.id] ?? 0;
-                const isSharedWorkspace = !workspace.ownerUserId;
+          {showLoadingState ? (
+            Array.from({ length: skeletonCount }, (_, index) => (
+              <Skeleton
+                key={`workspace-skeleton-${index}`}
+                className={cn(
+                  workspaceButtonSizeClass,
+                  "rounded-full",
+                  !isVertical ? "shrink-0" : undefined,
+                )}
+              />
+            ))
+          ) : renderGroupedRail ? (
+            workspaceGroups.map((group) => (
+              <div key={group.id} className="space-y-2">
+                <div className="flex items-center gap-2 px-1">
+                  <span className="h-px flex-1 bg-border/70" />
+                  <span className="text-[0.56rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/70">
+                    {group.label}
+                  </span>
+                  <span className="h-px flex-1 bg-border/70" />
+                </div>
+                <div className="flex flex-col items-center gap-2.5">
+                  {group.workspaces.map((workspace) => {
+                    const isActive = workspace.id === activeWorkspaceId;
+                    const badge = workspaceBadge(workspace.name);
+                    const count = resourceCountsByWorkspace[workspace.id] ?? 0;
+                    const displayCount = count > 99 ? "99+" : String(count);
+                    const isSharedWorkspace = !workspace.ownerUserId;
 
-                return (
-                  <Tooltip key={workspace.id}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => onWorkspaceChange(workspace.id)}
-                        aria-current={isActive ? "page" : undefined}
-                        aria-label={workspace.name}
-                        className={cn(
-                          "group/workspace relative flex items-center justify-center overflow-hidden border text-xs font-semibold transition-all",
-                          workspaceButtonSizeClass,
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                          isActive
-                            ? "rounded-xl border-primary bg-primary text-primary-foreground shadow-sm"
-                            : "rounded-full border-border bg-secondary text-secondary-foreground hover:rounded-xl hover:bg-accent hover:text-accent-foreground",
-                        )}
-                      >
-                        <span>{badge}</span>
-                        {compactMode && isVertical ? (
-                          <span className="pointer-events-none absolute left-[calc(100%+0.45rem)] top-1/2 z-20 hidden -translate-y-1/2 whitespace-nowrap rounded-sm border border-border/70 bg-popover px-1.5 py-0.5 text-[10px] font-medium text-popover-foreground opacity-0 transition-opacity group-hover/workspace:opacity-100 group-focus-visible/workspace:opacity-100 md:block">
-                            {workspace.name}
-                          </span>
-                        ) : null}
-                        {isSharedWorkspace ? (
-                          <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full border border-card bg-emerald-500" />
-                        ) : null}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side={isVertical ? "right" : "bottom"}>
-                      {workspace.name} - {count} resource{count === 1 ? "" : "s"}
-                    </TooltipContent>
-                  </Tooltip>
-                );
-              })}
+                    return (
+                      <Tooltip key={workspace.id}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => onWorkspaceChange(workspace.id)}
+                            aria-current={isActive ? "page" : undefined}
+                            aria-label={workspace.name}
+                            className={cn(
+                              "group/workspace relative flex items-center justify-center overflow-hidden border text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              workspaceButtonSizeClass,
+                              isActive
+                                ? "rounded-xl border-primary bg-primary text-primary-foreground shadow-[0_0_0_1px_rgba(88,166,255,0.24)]"
+                                : "rounded-full border-border bg-secondary text-secondary-foreground hover:rounded-xl hover:bg-accent hover:text-accent-foreground",
+                            )}
+                          >
+                            <span>{badge}</span>
+                            {count > 0 ? (
+                              <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full border border-card/90 bg-card px-1.5 py-[1px] text-[0.5rem] font-semibold leading-none text-muted-foreground shadow-sm">
+                                {displayCount}
+                              </span>
+                            ) : null}
+                            {isSharedWorkspace ? (
+                              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full border border-card bg-emerald-500" />
+                            ) : null}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="right">
+                          {workspace.name} - {count} resource{count === 1 ? "" : "s"}
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          ) : (
+            sortedWorkspaces.map((workspace) => {
+              const isActive = workspace.id === activeWorkspaceId;
+              const badge = workspaceBadge(workspace.name);
+              const count = resourceCountsByWorkspace[workspace.id] ?? 0;
+              const isSharedWorkspace = !workspace.ownerUserId;
+
+              return (
+                <Tooltip key={workspace.id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => onWorkspaceChange(workspace.id)}
+                      aria-current={isActive ? "page" : undefined}
+                      aria-label={workspace.name}
+                      className={cn(
+                        "group/workspace relative flex items-center justify-center overflow-hidden border text-xs font-semibold transition-all",
+                        workspaceButtonSizeClass,
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        isActive
+                          ? "rounded-xl border-primary bg-primary text-primary-foreground shadow-sm"
+                          : "rounded-full border-border bg-secondary text-secondary-foreground hover:rounded-xl hover:bg-accent hover:text-accent-foreground",
+                      )}
+                    >
+                      <span>{badge}</span>
+                      {compactMode && isVertical ? (
+                        <span className="pointer-events-none absolute left-[calc(100%+0.45rem)] top-1/2 z-20 hidden -translate-y-1/2 whitespace-nowrap rounded-sm border border-border/70 bg-popover px-1.5 py-0.5 text-[10px] font-medium text-popover-foreground opacity-0 transition-opacity group-hover/workspace:opacity-100 group-focus-visible/workspace:opacity-100 md:block">
+                          {workspace.name}
+                        </span>
+                      ) : null}
+                      {isSharedWorkspace ? (
+                        <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full border border-card bg-emerald-500" />
+                      ) : null}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side={isVertical ? "right" : "bottom"}>
+                    {workspace.name} - {count} resource{count === 1 ? "" : "s"}
+                  </TooltipContent>
+                </Tooltip>
+              );
+            })
+          )}
 
           {canCreateWorkspace ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  disableTooltip
-                  className={cn(
-                    workspaceButtonSizeClass,
-                    "rounded-full border border-dashed border-border text-muted-foreground transition-all hover:rounded-xl hover:text-foreground",
-                    isVertical ? "mt-1" : undefined,
-                  )}
-                  onClick={onCreateWorkspace}
-                  aria-label="Create workspace"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side={isVertical ? "right" : "bottom"}>
-                Create workspace
-              </TooltipContent>
-            </Tooltip>
+            renderGroupedRail ? (
+              <div className="pt-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      disableTooltip
+                      className="mx-auto flex h-10 w-10 rounded-full border border-dashed border-border text-muted-foreground transition-all hover:rounded-xl hover:text-foreground"
+                      onClick={onCreateWorkspace}
+                      aria-label="Create workspace"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    Create workspace
+                  </TooltipContent>
+                </Tooltip>
+                <p className="mt-2 text-center text-[0.56rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground/70">
+                  Add collection
+                </p>
+              </div>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disableTooltip
+                    className={cn(
+                      workspaceButtonSizeClass,
+                      "rounded-full border border-dashed border-border text-muted-foreground transition-all hover:rounded-xl hover:text-foreground",
+                      isVertical ? "mt-1" : undefined,
+                    )}
+                    onClick={onCreateWorkspace}
+                    aria-label="Create workspace"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side={isVertical ? "right" : "bottom"}>
+                  Create workspace
+                </TooltipContent>
+              </Tooltip>
+            )
           ) : null}
         </div>
       </ScrollArea>

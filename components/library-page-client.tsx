@@ -5919,7 +5919,7 @@ export default function LibraryPageClient({
         <aside
           className={cn(
             "hidden shrink-0 border-r border-border bg-card md:block",
-            isReallyCompactMode ? "w-9" : "w-14",
+            isReallyCompactMode ? "w-9" : "w-20",
           )}
           aria-label="Workspace navigation"
         >

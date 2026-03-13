@@ -24,6 +24,14 @@ import {
   detectLinkDuplicates,
   type LinkDuplicateMatch,
 } from "@/lib/link-duplicate-detection";
+import {
+  ACTIVE_ORGANIZATION_COOKIE,
+  ACTIVE_ORGANIZATION_STORAGE_KEY,
+  ACTIVE_WORKSPACE_COOKIE,
+  ACTIVE_WORKSPACE_STORAGE_KEY,
+  LIBRARY_LOCATION_STORAGE_KEY,
+  normalizePersistedId,
+} from "@/lib/library-location";
 import { cn } from "@/lib/utils";
 import type {
   ResourceCard,
@@ -396,9 +404,6 @@ async function readJson<T>(response: Response): Promise<T | null> {
 }
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar-width";
-const ACTIVE_ORGANIZATION_STORAGE_KEY = "active-organization-id";
-const ACTIVE_WORKSPACE_STORAGE_KEY = "active-workspace-id";
-const LIBRARY_LOCATION_STORAGE_KEY = "library-location-v1";
 const MOBILE_STACK_BREAKPOINT = 768;
 const SIDEBAR_SNAP_GRID = 8;
 const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 304;
@@ -770,15 +775,6 @@ function parseGeneralSettingsPreferences(
   }
 }
 
-function normalizePersistedId(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
 function buildLibrarySelectionStorageKey(
   organizationId: string | null,
   workspaceId: string | null,
@@ -833,6 +829,21 @@ function parsePersistedLibraryLocation(
   } catch {
     return null;
   }
+}
+
+function writePersistedIdCookie(name: string, value: string | null) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const encodedName = encodeURIComponent(name);
+  if (!value) {
+    document.cookie = `${encodedName}=; Path=/; Max-Age=0; SameSite=Lax`;
+    return;
+  }
+
+  const encodedValue = encodeURIComponent(value);
+  document.cookie = `${encodedName}=${encodedValue}; Path=/; Max-Age=31536000; SameSite=Lax`;
 }
 
 function parseCompactQueryValue(rawValue: string | null): boolean | null {
@@ -2277,7 +2288,7 @@ export default function LibraryPageClient({
   }, []);
 
   useEffect(() => {
-    if (sessionStatus === "loading" || !hasResolvedInitialWorkspace) {
+    if (!hasResolvedInitialWorkspace) {
       return;
     }
 
@@ -2298,7 +2309,6 @@ export default function LibraryPageClient({
     activeWorkspaceId,
     hasResolvedInitialWorkspace,
     loadLibrarySnapshot,
-    sessionStatus,
   ]);
 
   useEffect(() => {
@@ -2372,25 +2382,37 @@ export default function LibraryPageClient({
   }, [workspaces]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !activeOrganizationId) {
+    if (typeof window === "undefined") {
       return;
     }
 
-    window.localStorage.setItem(
-      ACTIVE_ORGANIZATION_STORAGE_KEY,
-      activeOrganizationId,
-    );
+    if (activeOrganizationId) {
+      window.localStorage.setItem(
+        ACTIVE_ORGANIZATION_STORAGE_KEY,
+        activeOrganizationId,
+      );
+    } else {
+      window.localStorage.removeItem(ACTIVE_ORGANIZATION_STORAGE_KEY);
+    }
+
+    writePersistedIdCookie(ACTIVE_ORGANIZATION_COOKIE, activeOrganizationId);
   }, [activeOrganizationId]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !activeWorkspaceId) {
+    if (typeof window === "undefined") {
       return;
     }
 
-    window.localStorage.setItem(
-      ACTIVE_WORKSPACE_STORAGE_KEY,
-      activeWorkspaceId,
-    );
+    if (activeWorkspaceId) {
+      window.localStorage.setItem(
+        ACTIVE_WORKSPACE_STORAGE_KEY,
+        activeWorkspaceId,
+      );
+    } else {
+      window.localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+    }
+
+    writePersistedIdCookie(ACTIVE_WORKSPACE_COOKIE, activeWorkspaceId);
   }, [activeWorkspaceId]);
 
   useEffect(() => {

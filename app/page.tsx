@@ -1,14 +1,29 @@
+import { cookies } from "next/headers";
+
 import { auth } from "@/auth";
 import LibraryPageClient from "@/components/library-page-client";
+import {
+  ACTIVE_ORGANIZATION_COOKIE,
+  ACTIVE_WORKSPACE_COOKIE,
+  normalizePersistedId,
+} from "@/lib/library-location";
 import { getLibraryBootstrapService } from "@/lib/resource-service";
 
 const RESOURCE_PAGE_SIZE = 200;
 
 async function getInitialLibrarySnapshot() {
   try {
-    const session = await auth();
+    const [session, cookieStore] = await Promise.all([auth(), cookies()]);
+    const organizationId = normalizePersistedId(
+      cookieStore.get(ACTIVE_ORGANIZATION_COOKIE)?.value,
+    );
+    const workspaceId = normalizePersistedId(
+      cookieStore.get(ACTIVE_WORKSPACE_COOKIE)?.value,
+    );
     const result = await getLibraryBootstrapService({
       userId: session?.user?.id ?? null,
+      organizationId,
+      workspaceId,
       includeAllWorkspaces: session?.user?.isFirstAdmin === true,
       offset: 0,
       limit: RESOURCE_PAGE_SIZE,

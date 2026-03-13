@@ -370,6 +370,9 @@ interface ResourceResponse extends ApiErrorResponse {
 }
 
 interface TobyImportResponse extends ApiErrorResponse {
+  workspace?: ResourceWorkspace;
+  workspaceId?: string | null;
+  organizationId?: string | null;
   importedLists?: number;
   importedCards?: number;
   importedResources?: number;
@@ -432,6 +435,7 @@ const COMPACT_QUERY_PARAM = "compact";
 const ASK_LIBRARY_HISTORY_LIMIT = 8;
 const AI_INBOX_MAX_URLS = 25;
 const RESOURCE_PAGE_SIZE = 200;
+const DEFAULT_TOBY_WORKSPACE_NAME = "Toby Import";
 const DEFAULT_SECTION_PREFERENCES: SectionPreferences = {
   compactTitles: false,
   showContextLine: true,
@@ -722,6 +726,20 @@ function clampDesktopSidebarWidth(
   );
 }
 
+function suggestTobyWorkspaceName(fileName: string | null): string {
+  const normalizedFileName = fileName?.trim() ?? "";
+  if (!normalizedFileName) {
+    return DEFAULT_TOBY_WORKSPACE_NAME;
+  }
+
+  const withoutExtension = normalizedFileName.replace(/\.[^.]+$/, "");
+  const normalized = withoutExtension
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || DEFAULT_TOBY_WORKSPACE_NAME;
+}
+
 function parseSectionPreferences(
   rawValue: string | null,
 ): SectionPreferences | null {
@@ -920,6 +938,11 @@ export default function LibraryPageClient({
   const [tobyImportRawInput, setTobyImportRawInput] = useState("");
   const [tobyImportFileName, setTobyImportFileName] = useState<string | null>(
     null,
+  );
+  const [tobyImportCreateWorkspace, setTobyImportCreateWorkspace] =
+    useState(false);
+  const [tobyImportWorkspaceName, setTobyImportWorkspaceName] = useState(
+    DEFAULT_TOBY_WORKSPACE_NAME,
   );
   const [aiInboxItems, setAiInboxItems] = useState<AiInboxItem[]>([]);
   const [aiInboxUseAi, setAiInboxUseAi] = useState(true);
@@ -1729,6 +1752,7 @@ export default function LibraryPageClient({
       workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null
     );
   }, [activeWorkspaceId, workspaces]);
+  const resolvedActiveOrganizationId = activeOrganization?.id ?? null;
   const resolvedActiveWorkspaceId = activeWorkspace?.id ?? null;
   const hasActiveWorkspace = Boolean(activeWorkspace);
 
@@ -4495,7 +4519,7 @@ export default function LibraryPageClient({
       return;
     }
 
-    if (!resolvedActiveWorkspaceId) {
+    if (!resolvedActiveWorkspaceId && !canCreateWorkspaces) {
       toast.error("Workspace unavailable", {
         description:
           "Select a current workspace before importing Toby JSON. If you just switched spaces, refresh once and try again.",
@@ -4503,8 +4527,15 @@ export default function LibraryPageClient({
       return;
     }
 
+    setTobyImportCreateWorkspace(!resolvedActiveWorkspaceId && canCreateWorkspaces);
+    setTobyImportWorkspaceName(suggestTobyWorkspaceName(tobyImportFileName));
     setTobyImportOpen(true);
-  }, [canManageResources, resolvedActiveWorkspaceId]);
+  }, [
+    canCreateWorkspaces,
+    canManageResources,
+    resolvedActiveWorkspaceId,
+    tobyImportFileName,
+  ]);
 
   const handleSelectTobyJsonFile = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -4520,6 +4551,7 @@ export default function LibraryPageClient({
         const content = await file.text();
         setTobyImportRawInput(content);
         setTobyImportFileName(file.name);
+        setTobyImportWorkspaceName(suggestTobyWorkspaceName(file.name));
       } catch {
         toast.error("Could not read Toby file", {
           description: "The selected file could not be loaded.",
@@ -4534,7 +4566,7 @@ export default function LibraryPageClient({
       return;
     }
 
-    if (!resolvedActiveWorkspaceId) {
+    if (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) {
       toast.error("Workspace unavailable", {
         description:
           "The selected workspace is no longer available. Refresh the library and choose a current workspace.",
@@ -4549,6 +4581,13 @@ export default function LibraryPageClient({
       return;
     }
 
+    if (tobyImportCreateWorkspace && tobyImportWorkspaceName.trim().length === 0) {
+      toast.error("Workspace name required", {
+        description: "Enter a name for the new workspace before importing.",
+      });
+      return;
+    }
+
     setIsTobyImporting(true);
     try {
       const response = await fetch("/api/import/toby", {
@@ -4557,7 +4596,14 @@ export default function LibraryPageClient({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          workspaceId: resolvedActiveWorkspaceId,
+          organizationId: resolvedActiveOrganizationId,
+          workspaceId: tobyImportCreateWorkspace
+            ? undefined
+            : resolvedActiveWorkspaceId,
+          createWorkspace: tobyImportCreateWorkspace,
+          workspaceName: tobyImportCreateWorkspace
+            ? tobyImportWorkspaceName.trim()
+            : undefined,
           content: tobyImportRawInput,
         }),
       });
@@ -4566,21 +4612,33 @@ export default function LibraryPageClient({
         throw new Error(payload?.error ?? "Failed to import Toby JSON.");
       }
 
+      const snapshotOrganizationId =
+        payload?.workspace?.organizationId ??
+        payload?.organizationId ??
+        resolvedActiveOrganizationId;
+      const snapshotWorkspaceId =
+        payload?.workspace?.id ??
+        payload?.workspaceId ??
+        resolvedActiveWorkspaceId;
+
       await loadLibrarySnapshot({
-        organizationId: activeOrganizationId,
-        workspaceId: resolvedActiveWorkspaceId,
+        organizationId: snapshotOrganizationId,
+        workspaceId: snapshotWorkspaceId,
       });
       setTobyImportOpen(false);
       setTobyImportRawInput("");
       setTobyImportFileName(null);
+      setTobyImportCreateWorkspace(false);
+      setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
 
       const importedResources = payload?.importedResources ?? 0;
       const importedCards = payload?.importedCards ?? importedResources;
       const importedLists = payload?.importedLists ?? 0;
       const failed = payload?.failed ?? 0;
+      const importedWorkspaceName = payload?.workspace?.name;
 
       toast.success("Toby import complete", {
-        description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${failed > 0 ? `, ${failed} failed.` : "."}`,
+        description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${importedWorkspaceName ? ` into ${importedWorkspaceName}` : ""}${failed > 0 ? `, ${failed} failed.` : "."}`,
       });
     } catch (error) {
       toast.error("Toby import failed", {
@@ -4593,11 +4651,14 @@ export default function LibraryPageClient({
       setIsTobyImporting(false);
     }
   }, [
-    activeOrganizationId,
+    canCreateWorkspaces,
     canManageResources,
     loadLibrarySnapshot,
+    resolvedActiveOrganizationId,
     resolvedActiveWorkspaceId,
+    tobyImportCreateWorkspace,
     tobyImportRawInput,
+    tobyImportWorkspaceName,
   ]);
 
   const handleAnalyzeAiInbox = useCallback(async () => {
@@ -5839,7 +5900,11 @@ export default function LibraryPageClient({
               variant="outline"
               size="sm"
               onClick={handleOpenTobyImport}
-              disabled={isResourcesLoading || isTobyImporting || !resolvedActiveWorkspaceId}
+              disabled={
+                isResourcesLoading ||
+                isTobyImporting ||
+                (!resolvedActiveWorkspaceId && !canCreateWorkspaces)
+              }
             >
               <Upload className="h-4 w-4" />
               <span className="ml-2 hidden sm:inline">Import Toby</span>
@@ -6046,7 +6111,10 @@ export default function LibraryPageClient({
                 size="icon"
                 className="h-8 w-8"
                 onClick={handleOpenTobyImport}
-                disabled={isTobyImporting || !resolvedActiveWorkspaceId}
+                disabled={
+                  isTobyImporting ||
+                  (!resolvedActiveWorkspaceId && !canCreateWorkspaces)
+                }
                 aria-label="Import Toby JSON"
               >
                 <Upload className="h-4 w-4" />
@@ -6784,7 +6852,10 @@ export default function LibraryPageClient({
                   Paste URL from clipboard
                 </ContextMenuItem>
                 <ContextMenuItem
-                  disabled={isTobyImporting || !resolvedActiveWorkspaceId}
+                  disabled={
+                    isTobyImporting ||
+                    (!resolvedActiveWorkspaceId && !canCreateWorkspaces)
+                  }
                   onSelect={handleOpenTobyImport}
                 >
                   <Upload className="mr-2 h-4 w-4" />
@@ -6856,6 +6927,8 @@ export default function LibraryPageClient({
           if (!open) {
             setTobyImportRawInput("");
             setTobyImportFileName(null);
+            setTobyImportCreateWorkspace(false);
+            setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
           }
         }}
       >
@@ -6863,13 +6936,59 @@ export default function LibraryPageClient({
           <DialogHeader>
             <DialogTitle>Import Toby JSON</DialogTitle>
             <DialogDescription>
-              Import a Toby JSON export into your active workspace. Each Toby
-              list becomes a category, and each Toby card becomes one resource
-              card with a single saved link.
+              Import a Toby JSON export into the current workspace, or create a
+              new workspace for it first.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
+            <div className="space-y-3 rounded-md border border-border/70 bg-card/50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Create a new workspace
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {resolvedActiveWorkspaceId
+                      ? `Leave this off to import into ${workspaceDisplayName}.`
+                      : "No current workspace is selected, so this import will create one first."}
+                  </p>
+                </div>
+                <Switch
+                  checked={tobyImportCreateWorkspace}
+                  onCheckedChange={setTobyImportCreateWorkspace}
+                  disabled={!canCreateWorkspaces || !resolvedActiveWorkspaceId}
+                  aria-label="Create a new workspace for this import"
+                />
+              </div>
+
+              {tobyImportCreateWorkspace ? (
+                <div className="space-y-2">
+                  <Label htmlFor="toby-workspace-name">Workspace name</Label>
+                  <Input
+                    id="toby-workspace-name"
+                    value={tobyImportWorkspaceName}
+                    onChange={(event) =>
+                      setTobyImportWorkspaceName(event.target.value)
+                    }
+                    placeholder={DEFAULT_TOBY_WORKSPACE_NAME}
+                    maxLength={80}
+                    disabled={isTobyImporting}
+                  />
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Import target: <strong>{workspaceDisplayName}</strong>
+                </p>
+              )}
+
+              {!canCreateWorkspaces ? (
+                <p className="text-xs text-muted-foreground">
+                  Your account cannot create another workspace right now.
+                </p>
+              ) : null}
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="toby-json-file">JSON file</Label>
               <Input
@@ -6899,8 +7018,7 @@ export default function LibraryPageClient({
                 disabled={isTobyImporting}
               />
               <p className="text-xs text-muted-foreground">
-                Import target: {workspaceDisplayName}. Custom Toby titles become
-                link labels, and custom descriptions become notes.
+                Toby lists become categories. Toby cards become resource cards.
               </p>
             </div>
 
@@ -6918,7 +7036,9 @@ export default function LibraryPageClient({
                 onClick={() => void handleImportTobyJson()}
                 disabled={
                   isTobyImporting ||
-                  !resolvedActiveWorkspaceId ||
+                  (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) ||
+                  (tobyImportCreateWorkspace &&
+                    tobyImportWorkspaceName.trim().length === 0) ||
                   tobyImportRawInput.trim().length === 0
                 }
               >

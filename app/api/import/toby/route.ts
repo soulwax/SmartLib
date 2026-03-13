@@ -10,15 +10,45 @@ import {
   assertRequestRateLimit,
   RATE_LIMIT_RULES,
 } from "@/lib/rate-limit"
-import { ResourceWorkspaceNotFoundError } from "@/lib/resource-repository"
-import { createResourceService } from "@/lib/resource-service"
+import {
+  ResourceOrganizationNotFoundError,
+  ResourceWorkspaceAlreadyExistsError,
+  ResourceWorkspaceLimitReachedError,
+  ResourceWorkspaceNotFoundError,
+} from "@/lib/resource-repository"
+import {
+  createResourceService,
+  createResourceWorkspaceService,
+} from "@/lib/resource-service"
 import { parseTobyJsonImport } from "@/lib/toby-import"
 
 export const runtime = "nodejs"
 
 const tobyImportSchema = z.object({
-  workspaceId: z.string().uuid(),
+  organizationId: z.string().uuid().nullable().optional(),
+  workspaceId: z.string().uuid().optional(),
+  createWorkspace: z.boolean().optional().default(false),
+  workspaceName: z.string().trim().min(1).max(80).optional(),
   content: z.string().trim().min(1).max(2_000_000),
+}).superRefine((value, ctx) => {
+  if (value.createWorkspace) {
+    if (!value.workspaceName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workspaceName"],
+        message: "Workspace name is required when creating a workspace.",
+      })
+    }
+    return
+  }
+
+  if (!value.workspaceId?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["workspaceId"],
+      message: "Workspace ID is required when importing into the current workspace.",
+    })
+  }
 })
 
 function errorResponse(
@@ -67,6 +97,29 @@ export async function POST(request: Request) {
     const parsedImport = parseTobyJsonImport(input.content)
 
     let mode: "database" | "mock" | undefined
+    let createdWorkspace: Awaited<
+      ReturnType<typeof createResourceWorkspaceService>
+    >["workspace"] | null = null
+    let targetWorkspaceId = input.workspaceId ?? null
+
+    if (input.createWorkspace) {
+      const workspaceResult = await createResourceWorkspaceService(
+        input.workspaceName!,
+        {
+          ownerUserId: session.user.id,
+          organizationId: input.organizationId ?? null,
+          includeAllWorkspaces: session.user.isFirstAdmin === true,
+        },
+      )
+      mode = workspaceResult.mode
+      createdWorkspace = workspaceResult.workspace
+      targetWorkspaceId = workspaceResult.workspace.id
+    }
+
+    if (!targetWorkspaceId) {
+      return errorResponse("No workspace was selected for the import.", 400)
+    }
+
     let importedResources = 0
     let failed = 0
 
@@ -75,7 +128,7 @@ export async function POST(request: Request) {
         const result = await createResourceService(
           {
             ...resource,
-            workspaceId: input.workspaceId,
+            workspaceId: targetWorkspaceId,
           },
           {
             ownerUserId: session.user.id,
@@ -106,6 +159,10 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         mode,
+        workspace: createdWorkspace,
+        workspaceId: targetWorkspaceId,
+        organizationId:
+          createdWorkspace?.organizationId ?? input.organizationId ?? null,
         importedLists: parsedImport.importedLists,
         importedCards: parsedImport.importedCards,
         importedResources,
@@ -135,6 +192,18 @@ export async function POST(request: Request) {
         "The selected workspace is no longer available. Refresh the library and choose a current workspace.",
         404,
       )
+    }
+
+    if (error instanceof ResourceWorkspaceAlreadyExistsError) {
+      return errorResponse(error.message, 409)
+    }
+
+    if (error instanceof ResourceWorkspaceLimitReachedError) {
+      return errorResponse(error.message, 409)
+    }
+
+    if (error instanceof ResourceOrganizationNotFoundError) {
+      return errorResponse(error.message, 404)
     }
 
     return errorResponse("Unexpected server error.", 500)

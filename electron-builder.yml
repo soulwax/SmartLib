@@ -102,4 +102,4 @@ linux:
 # publish:
 #   provider: github
 #   owner: your-org
-#   repo: lib.bluesix.dev
+#   repo: bluesix-library

@@ -12,9 +12,36 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 
 type WorkspaceRailOrientation = "vertical" | "horizontal";
+
+const WORKSPACE_TONES = [
+  {
+    background:
+      "linear-gradient(145deg, rgba(133, 108, 255, 0.18), rgba(79, 70, 229, 0.42))",
+    border: "rgba(153, 140, 255, 0.34)",
+    foreground: "rgba(244, 242, 255, 0.98)",
+  },
+  {
+    background:
+      "linear-gradient(145deg, rgba(46, 196, 182, 0.18), rgba(15, 118, 110, 0.4))",
+    border: "rgba(86, 227, 213, 0.32)",
+    foreground: "rgba(240, 255, 252, 0.98)",
+  },
+  {
+    background:
+      "linear-gradient(145deg, rgba(255, 159, 67, 0.18), rgba(221, 107, 32, 0.4))",
+    border: "rgba(255, 190, 122, 0.34)",
+    foreground: "rgba(255, 248, 238, 0.98)",
+  },
+  {
+    background:
+      "linear-gradient(145deg, rgba(59, 130, 246, 0.18), rgba(29, 78, 216, 0.42))",
+    border: "rgba(125, 181, 255, 0.34)",
+    foreground: "rgba(239, 246, 255, 0.98)",
+  },
+];
 
 interface WorkspaceRailProps {
   workspaces: ResourceWorkspace[];
@@ -46,6 +73,14 @@ function workspaceBadge(workspaceName: string): string {
   return initials || "??";
 }
 
+function workspaceTone(workspaceName: string) {
+  const hash = workspaceName
+    .split("")
+    .reduce((total, char) => total + char.charCodeAt(0), 0);
+
+  return WORKSPACE_TONES[hash % WORKSPACE_TONES.length];
+}
+
 export function WorkspaceRail({
   workspaces,
   activeWorkspaceId,
@@ -59,7 +94,7 @@ export function WorkspaceRail({
 }: WorkspaceRailProps) {
   const isVertical = orientation === "vertical";
   const workspaceButtonSizeClass = compactMode ? "h-8 w-8" : "h-9 w-9";
-  const renderGroupedRail = isVertical && !compactMode;
+  const renderAsList = isVertical && !compactMode;
 
   const sortedWorkspaces = useMemo(() => {
     return [...workspaces].sort((left, right) => {
@@ -74,6 +109,7 @@ export function WorkspaceRail({
       });
     });
   }, [workspaces]);
+
   const workspaceGroups = useMemo(() => {
     const shared = sortedWorkspaces.filter((workspace) => !workspace.ownerUserId);
     const personal = sortedWorkspaces.filter((workspace) => workspace.ownerUserId);
@@ -91,19 +127,26 @@ export function WorkspaceRail({
       },
     ].filter((group) => group.workspaces.length > 0);
   }, [sortedWorkspaces]);
+
   const showLoadingState = isLoading && sortedWorkspaces.length === 0;
   const skeletonCount = isVertical ? 5 : 6;
-  const totalWorkspaceCount = sortedWorkspaces.length;
 
   return (
     <div className={cn("flex h-full flex-col", !isVertical ? "w-full" : undefined)}>
-      {renderGroupedRail ? (
-        <div className="border-b border-border/70 px-2 py-3 text-center">
-          <p className="text-[0.6rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/75">
-            Collections
-          </p>
-          <div className="mt-2 inline-flex items-center rounded-full border border-border/70 bg-secondary/60 px-2 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            {totalWorkspaceCount}
+      {renderAsList ? (
+        <div className="border-b border-border/70 px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[0.66rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/80">
+                Workspaces
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Collections inside the active organization
+              </p>
+            </div>
+            <span className="rounded-full border border-border/70 bg-secondary/65 px-2 py-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              {sortedWorkspaces.length}
+            </span>
           </div>
         </div>
       ) : null}
@@ -111,12 +154,12 @@ export function WorkspaceRail({
       <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
         <div
           className={cn(
-            renderGroupedRail
+            renderAsList
               ? "flex flex-col gap-4 px-2 py-3"
               : compactMode
                 ? "flex gap-1 p-1.5"
                 : "flex gap-1.5 p-2",
-            isVertical && !renderGroupedRail ? "h-full flex-col items-center" : undefined,
+            isVertical && !renderAsList ? "h-full flex-col items-center" : undefined,
             !isVertical ? "items-center" : undefined,
           )}
         >
@@ -125,29 +168,31 @@ export function WorkspaceRail({
               <Skeleton
                 key={`workspace-skeleton-${index}`}
                 className={cn(
-                  workspaceButtonSizeClass,
-                  "rounded-full",
+                  renderAsList ? "h-14 w-full rounded-2xl" : workspaceButtonSizeClass,
+                  renderAsList ? undefined : "rounded-full",
                   !isVertical ? "shrink-0" : undefined,
                 )}
               />
             ))
-          ) : renderGroupedRail ? (
+          ) : renderAsList ? (
             workspaceGroups.map((group) => (
-              <div key={group.id} className="space-y-2">
-                <div className="flex items-center gap-2 px-1">
-                  <span className="h-px flex-1 bg-border/70" />
-                  <span className="text-[0.56rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/70">
+              <div key={group.id} className="space-y-1.5">
+                <div className="flex items-center gap-2 px-2">
+                  <span className="text-[0.58rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/70">
                     {group.label}
                   </span>
                   <span className="h-px flex-1 bg-border/70" />
                 </div>
-                <div className="flex flex-col items-center gap-2.5">
+
+                <div className="flex flex-col gap-1">
                   {group.workspaces.map((workspace) => {
                     const isActive = workspace.id === activeWorkspaceId;
                     const badge = workspaceBadge(workspace.name);
+                    const tone = workspaceTone(workspace.name);
                     const count = resourceCountsByWorkspace[workspace.id] ?? 0;
-                    const displayCount = count > 99 ? "99+" : String(count);
-                    const isSharedWorkspace = !workspace.ownerUserId;
+                    const workspaceMeta = workspace.ownerUserId
+                      ? "Private collection"
+                      : "Shared collection";
 
                     return (
                       <Tooltip key={workspace.id}>
@@ -158,22 +203,51 @@ export function WorkspaceRail({
                             aria-current={isActive ? "page" : undefined}
                             aria-label={workspace.name}
                             className={cn(
-                              "group/workspace relative flex items-center justify-center overflow-hidden border text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                              workspaceButtonSizeClass,
+                              "group/workspace relative flex items-center gap-3 rounded-r-2xl border-l-2 px-3 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                               isActive
-                                ? "rounded-xl border-primary bg-primary text-primary-foreground shadow-[0_0_0_1px_rgba(88,166,255,0.24)]"
-                                : "rounded-full border-border bg-secondary text-secondary-foreground hover:rounded-xl hover:bg-accent hover:text-accent-foreground",
+                                ? "border-primary bg-gradient-to-r from-primary/14 via-primary/6 to-transparent text-foreground"
+                                : "border-transparent text-muted-foreground hover:border-primary/40 hover:bg-accent/18 hover:text-foreground",
                             )}
                           >
-                            <span>{badge}</span>
-                            {count > 0 ? (
-                              <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full border border-card/90 bg-card px-1.5 py-[1px] text-[0.5rem] font-semibold leading-none text-muted-foreground shadow-sm">
-                                {displayCount}
+                            <span
+                              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-[0.68rem] font-bold uppercase tracking-[0.2em]"
+                              style={{
+                                background: tone.background,
+                                borderColor: tone.border,
+                                color: tone.foreground,
+                              }}
+                            >
+                              {badge}
+                            </span>
+
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-semibold text-foreground">
+                                {workspace.name}
                               </span>
-                            ) : null}
-                            {isSharedWorkspace ? (
-                              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full border border-card bg-emerald-500" />
-                            ) : null}
+                              <span className="mt-0.5 flex items-center gap-2 text-[0.64rem] uppercase tracking-[0.2em] text-muted-foreground/85">
+                                <span
+                                  className={cn(
+                                    "h-1.5 w-1.5 rounded-full",
+                                    workspace.ownerUserId ? "bg-primary/70" : "bg-emerald-500/80",
+                                  )}
+                                />
+                                {workspaceMeta}
+                              </span>
+                            </span>
+
+                            <span className="flex shrink-0 items-center gap-2">
+                              <span className="rounded-full border border-border/70 bg-secondary/70 px-2 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                                {count}
+                              </span>
+                              <ChevronRight
+                                className={cn(
+                                  "h-4 w-4 transition-transform",
+                                  isActive
+                                    ? "translate-x-0 text-primary"
+                                    : "translate-x-[-2px] text-muted-foreground/60 group-hover/workspace:translate-x-0 group-hover/workspace:text-foreground/80",
+                                )}
+                              />
+                            </span>
                           </button>
                         </TooltipTrigger>
                         <TooltipContent side="right">
@@ -229,30 +303,25 @@ export function WorkspaceRail({
           )}
 
           {canCreateWorkspace ? (
-            renderGroupedRail ? (
-              <div className="pt-1">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      disableTooltip
-                      className="mx-auto flex h-10 w-10 rounded-full border border-dashed border-border text-muted-foreground transition-all hover:rounded-xl hover:text-foreground"
-                      onClick={onCreateWorkspace}
-                      aria-label="Create workspace"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    Create workspace
-                  </TooltipContent>
-                </Tooltip>
-                <p className="mt-2 text-center text-[0.56rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground/70">
-                  Add collection
-                </p>
-              </div>
+            renderAsList ? (
+              <button
+                type="button"
+                onClick={onCreateWorkspace}
+                className="group/workspace relative flex w-full items-center gap-3 rounded-r-2xl border-l-2 border-dashed border-border/70 px-3 py-3 text-left text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/16 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Create workspace"
+              >
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-dashed border-border/70 bg-secondary/45 text-muted-foreground transition-colors group-hover/workspace:border-primary/40 group-hover/workspace:text-foreground">
+                  <Plus className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-foreground">
+                    Add workspace
+                  </span>
+                  <span className="mt-0.5 block text-[0.64rem] uppercase tracking-[0.2em] text-muted-foreground/85">
+                    Create a new collection
+                  </span>
+                </span>
+              </button>
             ) : (
               <Tooltip>
                 <TooltipTrigger asChild>

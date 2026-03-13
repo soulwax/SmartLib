@@ -2,6 +2,9 @@ import "server-only"
 
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 
+import { findAiPastePreferenceByUserId } from "@/lib/ai-paste-preference-repository"
+import type { AskLibraryThreadSummary } from "@/lib/ask-library-thread-repository"
+import { listAskLibraryThreadsForUser } from "@/lib/ask-library-thread-repository"
 import {
   consumeEmailVerificationToken as consumeDbEmailVerificationToken,
   consumePasswordResetToken as consumeDbPasswordResetToken,
@@ -12,40 +15,37 @@ import {
   ensureUserByEmail as ensureDbUserByEmail,
   ensureUserByUsername as ensureDbUserByUsername,
   findUserByEmail as findDbUser,
-  findUserByUsername as findDbUserByUsername,
   findUserById as findDbUserById,
+  findUserByUsername as findDbUserByUsername,
   hasFirstAdmin as hasDbFirstAdmin,
   listUsers as listDbUsers,
   makeUserExclusiveFirstAdmin as makeDbUserExclusiveFirstAdmin,
   markUserAsAdmin as markDbUserAsAdmin,
   markUserAsFirstAdmin as markDbUserAsFirstAdmin,
   markUserEmailVerified as markDbUserEmailVerified,
-  type AuthUserRecord,
-  updateUserRole as updateDbUserRole,
   updateUserPasswordHash as updateDbUserPasswordHash,
+  updateUserRole as updateDbUserRole,
   updateUserUsername as updateDbUserUsername,
   UserAlreadyExistsError,
   UserNotFoundError,
+  type AuthUserRecord,
 } from "@/lib/auth-repository"
 import type { UserRole } from "@/lib/authorization"
-import { hasDatabaseEnv, getOptionalSuperAdminEnv } from "@/lib/env"
-import { hashPassword, verifyPassword } from "@/lib/password"
-import type { AskLibraryThreadSummary } from "@/lib/ask-library-thread-repository"
-import { listAskLibraryThreadsForUser } from "@/lib/ask-library-thread-repository"
-import { findAiPastePreferenceByUserId } from "@/lib/ai-paste-preference-repository"
 import { findColorSchemePreferenceByUserId } from "@/lib/color-scheme-preference-repository"
-import {
-  listResourceCategories as listDbResourceCategories,
-  listResourceOrganizations as listDbResourceOrganizations,
-  listResources as listDbResources,
-  listResourceWorkspaces as listDbResourceWorkspaces,
-} from "@/lib/resource-repository"
+import { getOptionalSuperAdminEnv, hasDatabaseEnv } from "@/lib/env"
 import {
   listMockResourceCategories,
   listMockResourceOrganizations,
   listMockResources,
   listMockResourceWorkspaces,
 } from "@/lib/mock-resource-store"
+import { hashPassword, verifyPassword } from "@/lib/password"
+import {
+  listResourceCategories as listDbResourceCategories,
+  listResourceOrganizations as listDbResourceOrganizations,
+  listResources as listDbResources,
+  listResourceWorkspaces as listDbResourceWorkspaces,
+} from "@/lib/resource-repository"
 import type {
   ResourceCard,
   ResourceCategory,
@@ -267,16 +267,16 @@ async function sendEmailVerificationEmail(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Confirm your lib.bluesix account</title>
+  <title>Confirm your nandcore account</title>
 </head>
 <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#0f172a;">
   <!-- Hidden preheader — controls inbox preview text -->
-  <span style="display:none;max-height:0;overflow:hidden;opacity:0;">Confirm your email to activate your lib.bluesix account — link expires in ${expiryHours} hours.</span>
+  <span style="display:none;max-height:0;overflow:hidden;opacity:0;">Confirm your email to activate your nandcore account — link expires in ${expiryHours} hours.</span>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:40px 16px;">
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:8px;border:1px solid #e2e8f0;">
         <tr><td style="padding:32px 40px 0;">
-          <p style="margin:0;font-size:13px;font-weight:600;color:#64748b;letter-spacing:0.06em;text-transform:uppercase;">lib.bluesix</p>
+          <p style="margin:0;font-size:13px;font-weight:600;color:#64748b;letter-spacing:0.06em;text-transform:uppercase;">nandcore</p>
         </td></tr>
         <tr><td style="padding:24px 40px 32px;">
           <h1 style="margin:0 0 16px;font-size:22px;font-weight:700;line-height:1.3;color:#0f172a;">Confirm your email address</h1>
@@ -291,7 +291,7 @@ async function sendEmailVerificationEmail(
         </td></tr>
         <tr><td style="padding:0 40px;"><hr style="border:none;border-top:1px solid #e2e8f0;margin:0;"></td></tr>
         <tr><td style="padding:20px 40px 28px;">
-          <p style="margin:0;font-size:12px;line-height:1.6;color:#94a3b8;">This link expires in ${expiryHours} hours. If you did not create a lib.bluesix account, you can safely ignore this email — no account will be created without confirmation.</p>
+          <p style="margin:0;font-size:12px;line-height:1.6;color:#94a3b8;">This link expires in ${expiryHours} hours. If you did not create a nandcore account, you can safely ignore this email — no account will be created without confirmation.</p>
         </td></tr>
       </table>
     </td></tr>
@@ -300,7 +300,7 @@ async function sendEmailVerificationEmail(
 </html>`
 
   const text = [
-    "lib.bluesix — Confirm your email address",
+    "nandcore — Confirm your email address",
     "",
     "You are one step away from your personal library.",
     "Click the link below to confirm your email and activate your account:",
@@ -308,7 +308,7 @@ async function sendEmailVerificationEmail(
     verificationUrl,
     "",
     `This link expires in ${expiryHours} hours.`,
-    "If you did not create a lib.bluesix account, you can safely ignore this email.",
+    "If you did not create a nandcore account, you can safely ignore this email.",
   ].join("\n")
 
   try {
@@ -321,7 +321,7 @@ async function sendEmailVerificationEmail(
       body: JSON.stringify({
         from: fromAddress,
         to: [recipientEmail],
-        subject: "Confirm your lib.bluesix account",
+        subject: "Confirm your nandcore account",
         html,
         text,
         headers: {
@@ -380,14 +380,14 @@ async function sendPasswordResetEmail(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Reset your lib.bluesix password</title>
+  <title>Reset your nandcore password</title>
 </head>
 <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#0f172a;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:40px 16px;">
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:8px;border:1px solid #e2e8f0;">
         <tr><td style="padding:32px 40px 0;">
-          <p style="margin:0;font-size:13px;font-weight:600;color:#64748b;letter-spacing:0.06em;text-transform:uppercase;">lib.bluesix</p>
+          <p style="margin:0;font-size:13px;font-weight:600;color:#64748b;letter-spacing:0.06em;text-transform:uppercase;">nandcore</p>
         </td></tr>
         <tr><td style="padding:24px 40px 32px;">
           <h1 style="margin:0 0 16px;font-size:22px;font-weight:700;line-height:1.3;color:#0f172a;">Reset your password</h1>
@@ -411,7 +411,7 @@ async function sendPasswordResetEmail(
 </html>`
 
   const text = [
-    "lib.bluesix — Reset your password",
+    "nandcore — Reset your password",
     "",
     "Use this link to choose a new password:",
     "",
@@ -431,7 +431,7 @@ async function sendPasswordResetEmail(
       body: JSON.stringify({
         from: fromAddress,
         to: [recipientEmail],
-        subject: "Reset your lib.bluesix password",
+        subject: "Reset your nandcore password",
         html,
         text,
         headers: {

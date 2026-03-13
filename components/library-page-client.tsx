@@ -1729,7 +1729,8 @@ export default function LibraryPageClient({
       workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null
     );
   }, [activeWorkspaceId, workspaces]);
-  const hasActiveWorkspace = Boolean(activeWorkspaceId);
+  const resolvedActiveWorkspaceId = activeWorkspace?.id ?? null;
+  const hasActiveWorkspace = Boolean(activeWorkspace);
 
   const resourcesInActiveWorkspace = useMemo(() => {
     if (!activeWorkspaceId) {
@@ -4494,15 +4495,16 @@ export default function LibraryPageClient({
       return;
     }
 
-    if (!activeWorkspaceId) {
+    if (!resolvedActiveWorkspaceId) {
       toast.error("Workspace unavailable", {
-        description: "Select a workspace before importing Toby JSON.",
+        description:
+          "Select a current workspace before importing Toby JSON. If you just switched spaces, refresh once and try again.",
       });
       return;
     }
 
     setTobyImportOpen(true);
-  }, [activeWorkspaceId, canManageResources]);
+  }, [canManageResources, resolvedActiveWorkspaceId]);
 
   const handleSelectTobyJsonFile = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -4532,9 +4534,10 @@ export default function LibraryPageClient({
       return;
     }
 
-    if (!activeWorkspaceId) {
+    if (!resolvedActiveWorkspaceId) {
       toast.error("Workspace unavailable", {
-        description: "Select a workspace before importing Toby JSON.",
+        description:
+          "The selected workspace is no longer available. Refresh the library and choose a current workspace.",
       });
       return;
     }
@@ -4554,7 +4557,7 @@ export default function LibraryPageClient({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          workspaceId: activeWorkspaceId,
+          workspaceId: resolvedActiveWorkspaceId,
           content: tobyImportRawInput,
         }),
       });
@@ -4565,7 +4568,7 @@ export default function LibraryPageClient({
 
       await loadLibrarySnapshot({
         organizationId: activeOrganizationId,
-        workspaceId: activeWorkspaceId,
+        workspaceId: resolvedActiveWorkspaceId,
       });
       setTobyImportOpen(false);
       setTobyImportRawInput("");
@@ -4591,9 +4594,9 @@ export default function LibraryPageClient({
     }
   }, [
     activeOrganizationId,
-    activeWorkspaceId,
     canManageResources,
     loadLibrarySnapshot,
+    resolvedActiveWorkspaceId,
     tobyImportRawInput,
   ]);
 
@@ -5836,7 +5839,7 @@ export default function LibraryPageClient({
               variant="outline"
               size="sm"
               onClick={handleOpenTobyImport}
-              disabled={isResourcesLoading || isTobyImporting || !activeWorkspaceId}
+              disabled={isResourcesLoading || isTobyImporting || !resolvedActiveWorkspaceId}
             >
               <Upload className="h-4 w-4" />
               <span className="ml-2 hidden sm:inline">Import Toby</span>
@@ -6043,7 +6046,7 @@ export default function LibraryPageClient({
                 size="icon"
                 className="h-8 w-8"
                 onClick={handleOpenTobyImport}
-                disabled={isTobyImporting || !activeWorkspaceId}
+                disabled={isTobyImporting || !resolvedActiveWorkspaceId}
                 aria-label="Import Toby JSON"
               >
                 <Upload className="h-4 w-4" />
@@ -6781,7 +6784,7 @@ export default function LibraryPageClient({
                   Paste URL from clipboard
                 </ContextMenuItem>
                 <ContextMenuItem
-                  disabled={isTobyImporting || !activeWorkspaceId}
+                  disabled={isTobyImporting || !resolvedActiveWorkspaceId}
                   onSelect={handleOpenTobyImport}
                 >
                   <Upload className="mr-2 h-4 w-4" />
@@ -6915,7 +6918,7 @@ export default function LibraryPageClient({
                 onClick={() => void handleImportTobyJson()}
                 disabled={
                   isTobyImporting ||
-                  !activeWorkspaceId ||
+                  !resolvedActiveWorkspaceId ||
                   tobyImportRawInput.trim().length === 0
                 }
               >

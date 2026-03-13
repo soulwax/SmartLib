@@ -131,7 +131,10 @@ export async function POST(request: Request) {
     }
 
     if (error instanceof ResourceWorkspaceNotFoundError) {
-      return errorResponse(error.message, 404)
+      return errorResponse(
+        "The selected workspace is no longer available. Refresh the library and choose a current workspace.",
+        404,
+      )
     }
 
     return errorResponse("Unexpected server error.", 500)

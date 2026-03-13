@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 
 const RESOLVE_TIMEOUT_MS = 5_000
 const MAX_FAVICON_BYTES = 512 * 1024
+const MAX_DISCOVERY_BYTES = 256 * 1024
 const DEFAULT_FAVICON_SIZE = 64
 
 // Color palette for generated favicons (Material Design inspired)
@@ -89,6 +90,261 @@ function normalizeCacheHeader(value: string | null): string | null {
   }
 
   return trimmed.slice(0, 1024)
+}
+
+function isSupportedRemoteUrl(value: string): boolean {
+  return value.startsWith("https://") || value.startsWith("http://")
+}
+
+function extractTagAttribute(tag: string, attribute: string): string | null {
+  const pattern = new RegExp(
+    `\\b${attribute}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`,
+    "i"
+  )
+  const match = pattern.exec(tag)
+  if (!match) {
+    return null
+  }
+
+  return (match[1] ?? match[2] ?? match[3] ?? "").trim() || null
+}
+
+function parseLargestDeclaredSize(value: string | null): number {
+  if (!value) {
+    return 0
+  }
+
+  const matches = [...value.matchAll(/(\d+)x(\d+)/gi)]
+  if (matches.length === 0) {
+    return 0
+  }
+
+  return matches.reduce((largest, match) => {
+    const width = Number.parseInt(match[1] ?? "", 10)
+    const height = Number.parseInt(match[2] ?? "", 10)
+    return Math.max(largest, width, height)
+  }, 0)
+}
+
+function resolveDiscoveryUrl(value: string | null, baseUrl: string): string | null {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const resolved = new URL(value, baseUrl).toString()
+    return isSupportedRemoteUrl(resolved) ? resolved : null
+  } catch {
+    return null
+  }
+}
+
+function scoreDiscoveredIconCandidate(tag: string): number {
+  const relValue = extractTagAttribute(tag, "rel")?.toLowerCase() ?? ""
+  const relTokens = relValue.split(/\s+/).filter(Boolean)
+
+  if (
+    !relTokens.includes("icon") &&
+    !relTokens.includes("apple-touch-icon") &&
+    !relTokens.includes("mask-icon")
+  ) {
+    return Number.NEGATIVE_INFINITY
+  }
+
+  let score = 0
+
+  if (relTokens.includes("shortcut") && relTokens.includes("icon")) {
+    score += 120
+  } else if (relTokens.includes("icon")) {
+    score += 100
+  } else if (relTokens.includes("apple-touch-icon")) {
+    score += 70
+  } else if (relTokens.includes("mask-icon")) {
+    score += 35
+  }
+
+  const sizes = parseLargestDeclaredSize(extractTagAttribute(tag, "sizes"))
+  score += Math.min(sizes, 256) / 8
+
+  const typeValue = extractTagAttribute(tag, "type")?.toLowerCase() ?? ""
+  if (typeValue.includes("svg")) {
+    score += 8
+  } else if (typeValue.startsWith("image/")) {
+    score += 4
+  }
+
+  const hrefValue = extractTagAttribute(tag, "href")?.toLowerCase() ?? ""
+  if (hrefValue.endsWith(".svg")) {
+    score += 6
+  } else if (hrefValue.endsWith(".png")) {
+    score += 4
+  } else if (hrefValue.endsWith(".ico")) {
+    score += 2
+  }
+
+  return score
+}
+
+function extractDeclaredIconUrls(html: string, baseUrl: string): string[] {
+  const scoredCandidates = [...html.matchAll(/<link\b[^>]*>/gi)]
+    .map((match) => match[0])
+    .map((tag) => {
+      const score = scoreDiscoveredIconCandidate(tag)
+      const url = resolveDiscoveryUrl(extractTagAttribute(tag, "href"), baseUrl)
+      return { score, url }
+    })
+    .filter(
+      (
+        candidate
+      ): candidate is { score: number; url: string } =>
+        candidate.score > Number.NEGATIVE_INFINITY && Boolean(candidate.url)
+    )
+    .sort((left, right) => right.score - left.score)
+
+  return [...new Set(scoredCandidates.map((candidate) => candidate.url))]
+}
+
+function extractManifestUrl(html: string, baseUrl: string): string | null {
+  for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
+    const tag = match[0]
+    const relValue = extractTagAttribute(tag, "rel")?.toLowerCase() ?? ""
+    const relTokens = relValue.split(/\s+/).filter(Boolean)
+    if (!relTokens.includes("manifest")) {
+      continue
+    }
+
+    return resolveDiscoveryUrl(extractTagAttribute(tag, "href"), baseUrl)
+  }
+
+  return null
+}
+
+function extractManifestIconUrls(
+  manifest: unknown,
+  manifestUrl: string
+): string[] {
+  if (!manifest || typeof manifest !== "object" || !("icons" in manifest)) {
+    return []
+  }
+
+  const icons = Array.isArray(manifest.icons) ? manifest.icons : []
+  const scoredCandidates = icons
+    .map((icon) => {
+      if (!icon || typeof icon !== "object") {
+        return null
+      }
+
+      const srcValue =
+        "src" in icon && typeof icon.src === "string" ? icon.src : null
+      const purposeValue =
+        "purpose" in icon && typeof icon.purpose === "string"
+          ? icon.purpose.toLowerCase()
+          : ""
+      const typeValue =
+        "type" in icon && typeof icon.type === "string"
+          ? icon.type.toLowerCase()
+          : ""
+      const sizesValue =
+        "sizes" in icon && typeof icon.sizes === "string" ? icon.sizes : null
+      const url = resolveDiscoveryUrl(srcValue, manifestUrl)
+      if (!url) {
+        return null
+      }
+
+      let score = 60 + Math.min(parseLargestDeclaredSize(sizesValue), 256) / 8
+      if (purposeValue.includes("maskable")) {
+        score += 8
+      }
+      if (typeValue.includes("svg")) {
+        score += 6
+      }
+
+      return { score, url }
+    })
+    .filter((candidate): candidate is { score: number; url: string } => Boolean(candidate))
+    .sort((left, right) => right.score - left.score)
+
+  return [...new Set(scoredCandidates.map((candidate) => candidate.url))]
+}
+
+async function fetchTextDocument(
+  sourceUrl: string,
+  acceptedContentType: RegExp
+): Promise<{ body: string; responseUrl: string } | null> {
+  try {
+    const response = await fetch(sourceUrl, {
+      method: "GET",
+      signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS),
+      credentials: "omit",
+      redirect: "follow",
+      cache: "no-store",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; FaviconBot/1.0)",
+      },
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase()
+    if (!acceptedContentType.test(contentType)) {
+      return null
+    }
+
+    const declaredLength = Number.parseInt(
+      response.headers.get("content-length") ?? "",
+      10
+    )
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_DISCOVERY_BYTES) {
+      return null
+    }
+
+    const body = await response.text()
+    if (Buffer.byteLength(body, "utf8") > MAX_DISCOVERY_BYTES) {
+      return null
+    }
+
+    return {
+      body,
+      responseUrl: response.url || sourceUrl,
+    }
+  } catch {
+    return null
+  }
+}
+
+async function discoverDeclaredFaviconUrls(hostname: string): Promise<string[]> {
+  const homepage = await fetchTextDocument(`https://${hostname}/`, /text\/html|application\/xhtml\+xml/)
+  if (!homepage) {
+    return []
+  }
+
+  const declaredUrls = extractDeclaredIconUrls(homepage.body, homepage.responseUrl)
+  const manifestUrl = extractManifestUrl(homepage.body, homepage.responseUrl)
+
+  if (!manifestUrl) {
+    return declaredUrls
+  }
+
+  const manifest = await fetchTextDocument(manifestUrl, /application\/manifest\+json|application\/json/)
+  if (!manifest) {
+    return declaredUrls
+  }
+
+  let manifestPayload: unknown = null
+  try {
+    manifestPayload = JSON.parse(manifest.body)
+  } catch {
+    manifestPayload = null
+  }
+
+  const manifestUrls = extractManifestIconUrls(
+    manifestPayload,
+    manifest.responseUrl
+  )
+
+  return [...new Set([...declaredUrls, ...manifestUrls])]
 }
 
 /**
@@ -177,7 +433,7 @@ function normalizeContentType(
   return null
 }
 
-function buildCandidateUrls(
+function buildStaticCandidateUrls(
   hostname: string,
   options?: { skipGoogleFallback?: boolean; preferredSourceUrl?: string | null }
 ): string[] {
@@ -277,7 +533,8 @@ async function fetchFaviconAtUrl(
 
 async function resolveFromCandidateUrls(
   candidateUrls: string[],
-  hostname: string
+  hostname: string,
+  options?: { fallbackToGenerated?: boolean }
 ): Promise<ResolvedFaviconPayload | null> {
   for (const sourceUrl of candidateUrls) {
     const resolved = await fetchFaviconAtUrl(sourceUrl)
@@ -294,6 +551,10 @@ async function resolveFromCandidateUrls(
     }
   }
 
+  if (!options?.fallbackToGenerated) {
+    return null
+  }
+
   console.log(`[favicon] Using generated SVG for ${hostname}`)
   return generateFallbackFavicon(hostname)
 }
@@ -308,8 +569,47 @@ export async function resolveFavicon(
 ): Promise<ResolvedFaviconPayload | null> {
   if (!hostname) return null
 
-  const candidateUrls = buildCandidateUrls(hostname, options)
-  return resolveFromCandidateUrls(candidateUrls, hostname)
+  const faviconIcoUrl = `https://${hostname}/favicon.ico`
+  const staticCandidates = buildStaticCandidateUrls(hostname, options)
+  const staticWithoutGoogle = staticCandidates.filter(
+    (candidate) =>
+      candidate !== fallbackFaviconUrlForHostname(hostname, DEFAULT_FAVICON_SIZE)
+  )
+
+  const fastPathResult = await resolveFromCandidateUrls(
+    staticWithoutGoogle,
+    hostname
+  )
+  if (fastPathResult) {
+    return fastPathResult
+  }
+
+  const discoveredCandidates = (await discoverDeclaredFaviconUrls(hostname)).filter(
+    (candidate) =>
+      candidate !== options?.preferredSourceUrl && candidate !== faviconIcoUrl
+  )
+  const discoveredResult = await resolveFromCandidateUrls(
+    discoveredCandidates,
+    hostname
+  )
+  if (discoveredResult) {
+    return discoveredResult
+  }
+
+  const googleFallbackUrl = options?.skipGoogleFallback
+    ? null
+    : fallbackFaviconUrlForHostname(hostname, DEFAULT_FAVICON_SIZE)
+  if (googleFallbackUrl) {
+    const googleResult = await resolveFromCandidateUrls(
+      [googleFallbackUrl],
+      hostname
+    )
+    if (googleResult) {
+      return googleResult
+    }
+  }
+
+  return generateFallbackFavicon(hostname)
 }
 
 export async function revalidateFavicon(
@@ -356,11 +656,10 @@ export async function revalidateFavicon(
     }
   }
 
-  const fallbackCandidates = buildCandidateUrls(hostname, {
+  const resolved = await resolveFavicon(hostname, {
     skipGoogleFallback: options?.skipGoogleFallback,
-  }).filter((candidate) => candidate !== preferredSourceUrl)
-
-  const resolved = await resolveFromCandidateUrls(fallbackCandidates, hostname)
+    preferredSourceUrl: null,
+  })
   if (!resolved) {
     return null
   }

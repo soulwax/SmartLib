@@ -193,13 +193,13 @@ export function WorkspaceRail({
       <ContextMenuTrigger asChild>
         <div className={cn("flex h-full flex-col", !isVertical ? "w-full" : undefined)}>
           {renderAsList ? (
-            <div className="border-b border-border/70 px-3 py-3">
+            <div className="border-b border-border/70 px-2.5 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[0.66rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/80">
                     Workspaces
                   </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
                     Collections inside the active organization
                   </p>
                 </div>
@@ -214,7 +214,7 @@ export function WorkspaceRail({
             <div
               className={cn(
                 renderAsList
-                  ? "flex flex-col gap-4 px-2 py-3"
+                  ? "flex flex-col gap-3 px-1.5 py-2"
                   : compactMode
                     ? "flex gap-1 p-1.5"
                     : "flex gap-1.5 p-2",
@@ -235,8 +235,8 @@ export function WorkspaceRail({
             ))
           ) : renderAsList ? (
             workspaceGroups.map((group) => (
-              <div key={group.id} className="space-y-1.5">
-                <div className="flex items-center gap-2 px-2">
+              <div key={group.id} className="space-y-1">
+                <div className="flex items-center gap-2 px-1.5">
                   <span className="text-[0.58rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/70">
                     {group.label}
                   </span>
@@ -250,8 +250,8 @@ export function WorkspaceRail({
                     const tone = workspaceTone(workspace.name);
                     const count = resourceCountsByWorkspace[workspace.id] ?? 0;
                     const workspaceMeta = workspace.ownerUserId
-                      ? "Private collection"
-                      : "Shared collection";
+                      ? "Private"
+                      : "Shared";
 
                     return wrapWorkspaceItemMenu(
                       workspace,
@@ -263,14 +263,14 @@ export function WorkspaceRail({
                             aria-current={isActive ? "page" : undefined}
                             aria-label={workspace.name}
                             className={cn(
-                              "group/workspace relative flex items-center gap-3 rounded-r-2xl border-l-2 px-3 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              "group/workspace relative flex items-center gap-2.5 rounded-r-xl border-l-2 px-2 py-2 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                               isActive
                                 ? "border-primary bg-gradient-to-r from-primary/14 via-primary/6 to-transparent text-foreground"
                                 : "border-transparent text-muted-foreground hover:border-primary/40 hover:bg-accent/18 hover:text-foreground",
                             )}
                           >
                             <span
-                              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-[0.68rem] font-bold uppercase tracking-[0.2em]"
+                              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[0.62rem] font-bold uppercase tracking-[0.16em]"
                               style={{
                                 background: tone.background,
                                 borderColor: tone.border,
@@ -281,13 +281,13 @@ export function WorkspaceRail({
                             </span>
 
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-semibold text-foreground">
+                              <span className="block truncate text-[0.92rem] font-semibold leading-tight text-foreground">
                                 {workspace.name}
                               </span>
-                              <span className="mt-0.5 flex items-center gap-2 text-[0.64rem] uppercase tracking-[0.2em] text-muted-foreground/85">
+                              <span className="mt-0.5 flex items-center gap-1.5 text-[0.56rem] uppercase tracking-[0.16em] text-muted-foreground/80">
                                 <span
                                   className={cn(
-                                    "h-1.5 w-1.5 rounded-full",
+                                    "h-1.5 w-1.5 shrink-0 rounded-full",
                                     workspace.ownerUserId ? "bg-primary/70" : "bg-emerald-500/80",
                                   )}
                                 />
@@ -295,13 +295,13 @@ export function WorkspaceRail({
                               </span>
                             </span>
 
-                            <span className="flex shrink-0 items-center gap-2">
-                              <span className="rounded-full border border-border/70 bg-secondary/70 px-2 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                            <span className="flex shrink-0 items-center gap-1.5">
+                              <span className="rounded-full border border-border/70 bg-secondary/70 px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                                 {count}
                               </span>
                               <ChevronRight
                                 className={cn(
-                                  "h-4 w-4 transition-transform",
+                                  "h-3.5 w-3.5 transition-transform",
                                   isActive
                                     ? "translate-x-0 text-primary"
                                     : "translate-x-[-2px] text-muted-foreground/60 group-hover/workspace:translate-x-0 group-hover/workspace:text-foreground/80",
@@ -368,17 +368,17 @@ export function WorkspaceRail({
               <button
                 type="button"
                 onClick={onCreateWorkspace}
-                className="group/workspace relative flex w-full items-center gap-3 rounded-r-2xl border-l-2 border-dashed border-border/70 px-3 py-3 text-left text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/16 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group/workspace relative flex w-full items-center gap-2.5 rounded-r-xl border-l-2 border-dashed border-border/70 px-2 py-2 text-left text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent/16 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Create workspace"
               >
-                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-dashed border-border/70 bg-secondary/45 text-muted-foreground transition-colors group-hover/workspace:border-primary/40 group-hover/workspace:text-foreground">
+                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border/70 bg-secondary/45 text-muted-foreground transition-colors group-hover/workspace:border-primary/40 group-hover/workspace:text-foreground">
                   <Plus className="h-4 w-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-foreground">
+                  <span className="block truncate text-[0.92rem] font-semibold leading-tight text-foreground">
                     Add workspace
                   </span>
-                  <span className="mt-0.5 block text-[0.64rem] uppercase tracking-[0.2em] text-muted-foreground/85">
+                  <span className="mt-0.5 block text-[0.56rem] uppercase tracking-[0.16em] text-muted-foreground/80">
                     Create a new collection
                   </span>
                 </span>

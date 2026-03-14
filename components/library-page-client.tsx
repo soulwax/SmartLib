@@ -211,6 +211,70 @@ interface CategoryNameSuggestionResponse extends ApiErrorResponse {
   model?: string;
 }
 
+interface SmartCategorySplitPreviewItem {
+  resourceId: string;
+  label: string;
+  url: string;
+  note: string | null;
+  tags: string[];
+}
+
+interface SmartCategorySplitPreviewGroup {
+  key: string;
+  name: string;
+  reason: string | null;
+  resources: SmartCategorySplitPreviewItem[];
+}
+
+interface SmartCategorySplitPreviewResponse extends ApiErrorResponse {
+  category?: {
+    id: string;
+    name: string;
+    workspaceId: string;
+    resourceCount: number;
+  };
+  groups?: SmartCategorySplitPreviewGroup[];
+  warnings?: string[];
+  usedAi?: boolean;
+}
+
+interface SmartCategorySplitApplyResponse extends ApiErrorResponse {
+  category?: {
+    id: string;
+    name: string;
+    workspaceId: string;
+  };
+  createdCategories?: Array<{
+    id: string;
+    name: string;
+  }>;
+  movedResources?: number;
+  retainedResourceCount?: number;
+}
+
+interface SmartCategorySplitDraftGroup {
+  key: string;
+  name: string;
+  reason: string | null;
+  resources: SmartCategorySplitPreviewItem[];
+}
+
+interface SmartCategorySplitDraftState {
+  categoryId: string;
+  categoryName: string;
+  workspaceId: string;
+  resourceCount: number;
+  retainGroupKey: string;
+  groups: SmartCategorySplitDraftGroup[];
+  warnings: string[];
+  usedAi: boolean;
+}
+
+interface SmartCategorySplitSourceState {
+  categoryId: string;
+  categoryName: string;
+}
+
 type AiPastePromptDecision = "accepted" | "declined";
 
 interface AiPastePreferenceResponse extends ApiErrorResponse {
@@ -562,10 +626,13 @@ function formatDateTime(value: string | null | undefined): string {
 }
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar-width";
+const WORKSPACE_RAIL_WIDTH_STORAGE_KEY = "workspace-rail-width";
 const MOBILE_STACK_BREAKPOINT = 768;
 const SIDEBAR_SNAP_GRID = 8;
 const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 304;
 const DESKTOP_SIDEBAR_MIN_WIDTH = 200;
+const DESKTOP_WORKSPACE_RAIL_DEFAULT_WIDTH = 232;
+const DESKTOP_WORKSPACE_RAIL_MIN_WIDTH = 176;
 const SIDEBAR_KEYBOARD_STEP = SIDEBAR_SNAP_GRID;
 const FALLBACK_VIEWPORT_WIDTH = 1440;
 const SECTION_PREFERENCES_STORAGE_KEY = "section-preferences";
@@ -610,6 +677,25 @@ function compareResourcesByOrder(left: ResourceCard, right: ResourceCard): numbe
   }
 
   return left.id.localeCompare(right.id);
+}
+
+function createSmartSplitDraftGroupKey(seed: string): string {
+  return `split-${seed}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatSmartSplitResourceMeta(url: string): string {
+  if (!url) {
+    return "No link URL";
+  }
+
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.replace(/^www\./i, "");
+    const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
+    return `${hostname}${pathname}` || hostname || url;
+  } catch {
+    return url;
+  }
 }
 
 function calculateSparseOrder(
@@ -839,10 +925,27 @@ function snapSidebarWidth(width: number): number {
   return Math.round(width / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID;
 }
 
-function getDesktopSidebarMaxWidth(viewportWidth: number): number {
+function getDesktopPanelMaxWidth(
+  viewportWidth: number,
+  minWidth: number,
+  maxViewportFraction: number,
+): number {
   return Math.max(
-    DESKTOP_SIDEBAR_MIN_WIDTH,
-    Math.floor((viewportWidth * 0.5) / SIDEBAR_SNAP_GRID) * SIDEBAR_SNAP_GRID,
+    minWidth,
+    Math.floor((viewportWidth * maxViewportFraction) / SIDEBAR_SNAP_GRID) *
+      SIDEBAR_SNAP_GRID,
+  );
+}
+
+function getDesktopSidebarMaxWidth(viewportWidth: number): number {
+  return getDesktopPanelMaxWidth(viewportWidth, DESKTOP_SIDEBAR_MIN_WIDTH, 0.5);
+}
+
+function getDesktopWorkspaceRailMaxWidth(viewportWidth: number): number {
+  return getDesktopPanelMaxWidth(
+    viewportWidth,
+    DESKTOP_WORKSPACE_RAIL_MIN_WIDTH,
+    0.3,
   );
 }
 
@@ -863,6 +966,18 @@ function clampDesktopSidebarWidth(
   return Math.min(
     maxWidth,
     Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, snapSidebarWidth(width)),
+  );
+}
+
+function clampDesktopWorkspaceRailWidth(
+  width: number,
+  viewportWidth = getViewportWidth(),
+): number {
+  const maxWidth = getDesktopWorkspaceRailMaxWidth(viewportWidth);
+
+  return Math.min(
+    maxWidth,
+    Math.max(DESKTOP_WORKSPACE_RAIL_MIN_WIDTH, snapSidebarWidth(width)),
   );
 }
 
@@ -1103,6 +1218,18 @@ export default function LibraryPageClient({
   const [tobyImportHistoryError, setTobyImportHistoryError] = useState<
     string | null
   >(null);
+  const [smartCategorySplitOpen, setSmartCategorySplitOpen] = useState(false);
+  const [smartCategorySplitSource, setSmartCategorySplitSource] =
+    useState<SmartCategorySplitSourceState | null>(null);
+  const [smartCategorySplitDraft, setSmartCategorySplitDraft] =
+    useState<SmartCategorySplitDraftState | null>(null);
+  const [smartCategorySplitError, setSmartCategorySplitError] = useState<
+    string | null
+  >(null);
+  const [isSmartCategorySplitPreviewing, setIsSmartCategorySplitPreviewing] =
+    useState(false);
+  const [isSmartCategorySplitApplying, setIsSmartCategorySplitApplying] =
+    useState(false);
   const [aiInboxItems, setAiInboxItems] = useState<AiInboxItem[]>([]);
   const [aiInboxUseAi, setAiInboxUseAi] = useState(true);
   const [isAiInboxAnalyzing, setIsAiInboxAnalyzing] = useState(false);
@@ -1181,13 +1308,21 @@ export default function LibraryPageClient({
   const [desktopSidebarWidth, setDesktopSidebarWidth] = useState<number>(
     clampDesktopSidebarWidth(DESKTOP_SIDEBAR_DEFAULT_WIDTH),
   );
+  const [desktopWorkspaceRailWidth, setDesktopWorkspaceRailWidth] =
+    useState<number>(
+      clampDesktopWorkspaceRailWidth(DESKTOP_WORKSPACE_RAIL_DEFAULT_WIDTH),
+    );
   const [viewportWidth, setViewportWidth] = useState<number>(
     FALLBACK_VIEWPORT_WIDTH,
   );
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
+  const [isWorkspaceRailResizing, setIsWorkspaceRailResizing] = useState(false);
   const hasLoadedSidebarWidthRef = useRef(false);
+  const hasLoadedWorkspaceRailWidthRef = useRef(false);
   const resizeRafIdRef = useRef<number | null>(null);
   const pendingSidebarWidthRef = useRef<number | null>(null);
+  const workspaceRailResizeRafIdRef = useRef<number | null>(null);
+  const pendingWorkspaceRailWidthRef = useRef<number | null>(null);
   const snapshotRequestIdRef = useRef(0);
   const snapshotInFlightSelectionKeyRef = useRef<string | null>(null);
   const loadedSnapshotSelectionKeyRef = useRef<string | null>(
@@ -1389,6 +1524,12 @@ export default function LibraryPageClient({
     if (isAiInboxSummarizing) {
       return "Summarizing AI inbox...";
     }
+    if (isSmartCategorySplitPreviewing) {
+      return "Preparing smart category split preview...";
+    }
+    if (isSmartCategorySplitApplying) {
+      return "Applying smart category split...";
+    }
     if (isAskingLibrary) {
       return "Analyzing your library...";
     }
@@ -1460,6 +1601,8 @@ export default function LibraryPageClient({
     isAiInboxRenamingCategories,
     isAiInboxSummarizing,
     isAiPastePreferenceSaving,
+    isSmartCategorySplitApplying,
+    isSmartCategorySplitPreviewing,
     isAskingLibrary,
     isAuthSubmitting,
     isCategoryMutating,
@@ -1479,6 +1622,8 @@ export default function LibraryPageClient({
     isWorkspaceRenaming,
   ]);
   const desktopSidebarMaxWidth = getDesktopSidebarMaxWidth(viewportWidth);
+  const desktopWorkspaceRailMaxWidth =
+    getDesktopWorkspaceRailMaxWidth(viewportWidth);
   const updateSectionPreference = useCallback(
     (key: keyof SectionPreferences, checked: boolean) => {
       setSectionPreferences((previous) => ({
@@ -1909,6 +2054,27 @@ export default function LibraryPageClient({
       setDesktopSidebarWidth(pendingWidth);
     });
   }, []);
+  const queueWorkspaceRailWidthUpdate = useCallback((nextWidth: number) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    pendingWorkspaceRailWidthRef.current = nextWidth;
+    if (workspaceRailResizeRafIdRef.current !== null) {
+      return;
+    }
+
+    workspaceRailResizeRafIdRef.current = window.requestAnimationFrame(() => {
+      workspaceRailResizeRafIdRef.current = null;
+      const pendingWidth = pendingWorkspaceRailWidthRef.current;
+      if (pendingWidth === null) {
+        return;
+      }
+
+      pendingWorkspaceRailWidthRef.current = null;
+      setDesktopWorkspaceRailWidth(pendingWidth);
+    });
+  }, []);
 
   const activeOrganization = useMemo(() => {
     if (!activeOrganizationId) {
@@ -2205,6 +2371,27 @@ export default function LibraryPageClient({
       return categoryRecord.ownerUserId === sessionUserId;
     },
     [categoryRecordByLowerName, sessionUserId],
+  );
+  const canSmartSplitCategoryByName = useCallback(
+    (categoryName: string) => {
+      if (!canManageCategories || categoryName === "All" || !activeWorkspaceId) {
+        return false;
+      }
+
+      const categoryRecord =
+        categoryRecordByLowerName.get(categoryName.toLowerCase()) ?? null;
+      if (!categoryRecord || categoryRecord.workspaceId !== activeWorkspaceId) {
+        return false;
+      }
+
+      return (resourceCounts[categoryRecord.name] ?? 0) >= 4;
+    },
+    [
+      activeWorkspaceId,
+      canManageCategories,
+      categoryRecordByLowerName,
+      resourceCounts,
+    ],
   );
   const resolveResourceCategoryId = useCallback(
     (resource: ResourceCard): string | null => {
@@ -3036,12 +3223,45 @@ export default function LibraryPageClient({
       return;
     }
 
+    const storedWidth = window.localStorage.getItem(
+      WORKSPACE_RAIL_WIDTH_STORAGE_KEY,
+    );
+    if (storedWidth) {
+      const parsedWidth = Number.parseInt(storedWidth, 10);
+      if (Number.isFinite(parsedWidth)) {
+        setDesktopWorkspaceRailWidth(
+          clampDesktopWorkspaceRailWidth(parsedWidth, window.innerWidth),
+        );
+      }
+    } else {
+      window.localStorage.setItem(
+        WORKSPACE_RAIL_WIDTH_STORAGE_KEY,
+        String(
+          clampDesktopWorkspaceRailWidth(
+            DESKTOP_WORKSPACE_RAIL_DEFAULT_WIDTH,
+            window.innerWidth,
+          ),
+        ),
+      );
+    }
+
+    hasLoadedWorkspaceRailWidthRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
     const syncSidebarWidth = (viewportWidth: number) => {
       setViewportWidth((currentWidth) =>
         currentWidth === viewportWidth ? currentWidth : viewportWidth,
       );
       setDesktopSidebarWidth((currentWidth) =>
         clampDesktopSidebarWidth(currentWidth, viewportWidth),
+      );
+      setDesktopWorkspaceRailWidth((currentWidth) =>
+        clampDesktopWorkspaceRailWidth(currentWidth, viewportWidth),
       );
     };
 
@@ -3082,9 +3302,27 @@ export default function LibraryPageClient({
   }, [desktopSidebarWidth]);
 
   useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !hasLoadedWorkspaceRailWidthRef.current
+    ) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      WORKSPACE_RAIL_WIDTH_STORAGE_KEY,
+      String(desktopWorkspaceRailWidth),
+    );
+  }, [desktopWorkspaceRailWidth]);
+
+  useEffect(() => {
     return () => {
       if (resizeRafIdRef.current !== null) {
         window.cancelAnimationFrame(resizeRafIdRef.current);
+      }
+
+      if (workspaceRailResizeRafIdRef.current !== null) {
+        window.cancelAnimationFrame(workspaceRailResizeRafIdRef.current);
       }
     };
   }, []);
@@ -3945,6 +4183,437 @@ export default function LibraryPageClient({
     await handleDeleteCategoryByName(activeCategory);
   }, [activeCategory, handleDeleteCategoryByName]);
 
+  const resetSmartCategorySplitState = useCallback(() => {
+    setSmartCategorySplitSource(null);
+    setSmartCategorySplitDraft(null);
+    setSmartCategorySplitError(null);
+    setIsSmartCategorySplitPreviewing(false);
+    setIsSmartCategorySplitApplying(false);
+  }, []);
+
+  const runSmartCategorySplitPreview = useCallback(
+    async (categoryRecord: ResourceCategory) => {
+      setSmartCategorySplitOpen(true);
+      setSmartCategorySplitSource({
+        categoryId: categoryRecord.id,
+        categoryName: categoryRecord.name,
+      });
+      setSmartCategorySplitDraft(null);
+      setSmartCategorySplitError(null);
+      setIsSmartCategorySplitPreviewing(true);
+
+      try {
+        const response = await fetch(
+          `/api/categories/${categoryRecord.id}/smart-split`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            cache: "no-store",
+            credentials: "same-origin",
+          },
+        );
+        const payload = await readJson<SmartCategorySplitPreviewResponse>(response);
+
+        if (!response.ok || !payload?.category || !payload?.groups?.length) {
+          throw new Error(
+            payload?.error ?? "Failed to build a smart category split preview.",
+          );
+        }
+
+        const groups: SmartCategorySplitDraftGroup[] = payload.groups.map((group) => ({
+          key: group.key,
+          name: group.name,
+          reason: group.reason,
+          resources: [...group.resources],
+        }));
+        const retainGroupKey =
+          [...groups].sort((left, right) => right.resources.length - left.resources.length)[0]
+            ?.key ?? groups[0]?.key;
+
+        if (!retainGroupKey) {
+          throw new Error("The smart split preview did not return any groups.");
+        }
+
+        setSmartCategorySplitDraft({
+          categoryId: payload.category.id,
+          categoryName: payload.category.name,
+          workspaceId: payload.category.workspaceId,
+          resourceCount: payload.category.resourceCount,
+          retainGroupKey,
+          groups,
+          warnings: payload.warnings ?? [],
+          usedAi: Boolean(payload.usedAi),
+        });
+
+        return true;
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Could not prepare this smart category split preview.";
+        setSmartCategorySplitError(message);
+        toast.error("Smart split preview failed", {
+          description: message,
+        });
+        return false;
+      } finally {
+        setIsSmartCategorySplitPreviewing(false);
+      }
+    },
+    [],
+  );
+
+  const handleOpenSmartCategorySplitPreview = useCallback(
+    (categoryName: string) => {
+      if (!canManageCategories) {
+        toast.error("Insufficient permissions", {
+          description: "Only administrators can split categories.",
+        });
+        return;
+      }
+
+      const categoryRecord =
+        categoryRecordByLowerName.get(categoryName.toLowerCase()) ?? null;
+      if (!categoryRecord) {
+        toast.error("Category not found", {
+          description: `Could not find "${categoryName}".`,
+        });
+        return;
+      }
+
+      const resourceCount = resourceCounts[categoryRecord.name] ?? 0;
+      if (resourceCount < 4) {
+        toast.error("Not enough resources to split", {
+          description:
+            "A smart split needs at least 4 resources in the category to produce useful buckets.",
+        });
+        return;
+      }
+
+      void runSmartCategorySplitPreview(categoryRecord);
+    },
+    [
+      canManageCategories,
+      categoryRecordByLowerName,
+      resourceCounts,
+      runSmartCategorySplitPreview,
+    ],
+  );
+
+  const handleRegenerateSmartCategorySplitPreview = useCallback(() => {
+    if (!smartCategorySplitSource) {
+      return;
+    }
+
+    const categoryRecord =
+      categoryRecords.find(
+        (record) => record.id === smartCategorySplitSource.categoryId,
+      ) ?? null;
+    if (!categoryRecord) {
+      toast.error("Category not found", {
+        description:
+          "This category is no longer available. Refresh the library and try again.",
+      });
+      return;
+    }
+
+    void runSmartCategorySplitPreview(categoryRecord);
+  }, [categoryRecords, runSmartCategorySplitPreview, smartCategorySplitSource]);
+
+  const handleSmartCategorySplitRenameGroup = useCallback(
+    (groupKey: string, nextName: string) => {
+      setSmartCategorySplitDraft((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          groups: current.groups.map((group) =>
+            group.key === groupKey ? { ...group, name: nextName } : group,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
+  const handleSmartCategorySplitRetainGroup = useCallback((groupKey: string) => {
+    setSmartCategorySplitDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const targetGroup = current.groups.find((group) => group.key === groupKey) ?? null;
+      if (!targetGroup || targetGroup.resources.length === 0) {
+        return current;
+      }
+
+      return {
+        ...current,
+        retainGroupKey: groupKey,
+      };
+    });
+  }, []);
+
+  const handleSmartCategorySplitMoveResource = useCallback(
+    (resourceId: string, targetGroupKey: string) => {
+      setSmartCategorySplitDraft((current) => {
+        if (!current) {
+          return current;
+        }
+
+        let movedResource: SmartCategorySplitPreviewItem | null = null;
+        const nextGroups = current.groups.map((group) => {
+          const existingResource =
+            group.resources.find((resource) => resource.resourceId === resourceId) ?? null;
+          if (existingResource) {
+            movedResource = existingResource;
+          }
+
+          return {
+            ...group,
+            resources: group.resources.filter(
+              (resource) => resource.resourceId !== resourceId,
+            ),
+          };
+        });
+
+        if (!movedResource) {
+          return current;
+        }
+
+        const targetIndex = nextGroups.findIndex((group) => group.key === targetGroupKey);
+        if (targetIndex === -1) {
+          return current;
+        }
+
+        nextGroups[targetIndex] = {
+          ...nextGroups[targetIndex],
+          resources: [...nextGroups[targetIndex].resources, movedResource],
+        };
+
+        const nextRetainGroupKey = nextGroups.some(
+          (group) =>
+            group.key === current.retainGroupKey && group.resources.length > 0,
+        )
+          ? current.retainGroupKey
+          : nextGroups.find((group) => group.resources.length > 0)?.key ??
+            current.retainGroupKey;
+
+        return {
+          ...current,
+          groups: nextGroups,
+          retainGroupKey: nextRetainGroupKey,
+        };
+      });
+    },
+    [],
+  );
+
+  const handleSmartCategorySplitAddGroup = useCallback(() => {
+    if ((smartCategorySplitDraft?.groups.length ?? 0) >= 6) {
+      toast.error("Group limit reached", {
+        description: "Keep the split broad. Use at most 6 target categories.",
+      });
+      return;
+    }
+
+    setSmartCategorySplitDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextIndex = current.groups.length + 1;
+      return {
+        ...current,
+        groups: [
+          ...current.groups,
+          {
+            key: createSmartSplitDraftGroupKey(String(nextIndex)),
+            name: `New Category ${nextIndex}`,
+            reason: "Manual category added during review.",
+            resources: [],
+          },
+        ],
+      };
+    });
+  }, [smartCategorySplitDraft]);
+
+  const handleSmartCategorySplitRemoveGroup = useCallback(
+    (groupKey: string) => {
+      const targetGroup =
+        smartCategorySplitDraft?.groups.find((group) => group.key === groupKey) ?? null;
+      if (!targetGroup) {
+        return;
+      }
+
+      if (targetGroup.resources.length > 0) {
+        toast.error("Move items out first", {
+          description:
+            "Only empty proposed categories can be removed from the dry run.",
+        });
+        return;
+      }
+
+      setSmartCategorySplitDraft((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const nextGroups = current.groups.filter((group) => group.key !== groupKey);
+        return {
+          ...current,
+          groups: nextGroups,
+          retainGroupKey: nextGroups.some(
+            (group) => group.key === current.retainGroupKey,
+          )
+            ? current.retainGroupKey
+            : nextGroups.find((group) => group.resources.length > 0)?.key ??
+              current.retainGroupKey,
+        };
+      });
+    },
+    [smartCategorySplitDraft],
+  );
+
+  const handleApplySmartCategorySplit = useCallback(async () => {
+    if (!smartCategorySplitDraft) {
+      return;
+    }
+
+    const normalizedGroups = smartCategorySplitDraft.groups
+      .map((group) => ({
+        key: group.key,
+        name: group.name.trim(),
+        resourceIds: group.resources.map((resource) => resource.resourceId),
+      }))
+      .filter((group) => group.resourceIds.length > 0);
+
+    if (normalizedGroups.length < 2) {
+      toast.error("Need at least two categories", {
+        description:
+          "Move resources so at least two target categories have items before applying the split.",
+      });
+      return;
+    }
+
+    const blankName = normalizedGroups.find((group) => group.name.length === 0) ?? null;
+    if (blankName) {
+      toast.error("Category name required", {
+        description: "Each proposed category needs a name before you can apply the split.",
+      });
+      return;
+    }
+
+    const duplicateNames = new Set<string>();
+    for (const group of normalizedGroups) {
+      const normalizedName = group.name.toLowerCase();
+      if (duplicateNames.has(normalizedName)) {
+        toast.error("Duplicate category names", {
+          description:
+            "Each proposed category needs a unique name before the split can be applied.",
+        });
+        return;
+      }
+      duplicateNames.add(normalizedName);
+    }
+
+    const assignedCount = normalizedGroups.reduce(
+      (total, group) => total + group.resourceIds.length,
+      0,
+    );
+    if (assignedCount !== smartCategorySplitDraft.resourceCount) {
+      toast.error("Review the proposed split", {
+        description:
+          "Every resource from the source category must be assigned exactly once before applying the split.",
+      });
+      return;
+    }
+
+    const retainGroupKey = normalizedGroups.some(
+      (group) => group.key === smartCategorySplitDraft.retainGroupKey,
+    )
+      ? smartCategorySplitDraft.retainGroupKey
+      : normalizedGroups[0].key;
+
+    setSmartCategorySplitError(null);
+    setIsSmartCategorySplitApplying(true);
+
+    try {
+      const response = await fetch(
+        `/api/categories/${smartCategorySplitDraft.categoryId}/smart-split`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+          credentials: "same-origin",
+          body: JSON.stringify({
+            retainGroupKey,
+            groups: normalizedGroups,
+          }),
+        },
+      );
+      const payload = await readJson<SmartCategorySplitApplyResponse>(response);
+
+      if (!response.ok || !payload?.category) {
+        throw new Error(payload?.error ?? "Failed to apply the smart category split.");
+      }
+
+      if (payload.mode) {
+        setDataMode(payload.mode);
+      }
+
+      setActiveCategory(payload.category.name);
+      setActiveWorkspaceId(payload.category.workspaceId);
+
+      setIsRefreshingLibrary(true);
+      const refreshed = await loadLibrarySnapshot({
+        organizationId: activeOrganizationId,
+        workspaceId: payload.category.workspaceId,
+      }).finally(() => {
+        setIsRefreshingLibrary(false);
+      });
+
+      const movedResources = payload.movedResources ?? 0;
+      const createdCount = payload.createdCategories?.length ?? 0;
+      toast.success("Category split applied", {
+        description: refreshed
+          ? `${movedResources} resource(s) were reorganized into ${createdCount + 1} categories.`
+          : `${movedResources} resource(s) were reorganized. Refresh once if the current view still looks stale.`,
+      });
+
+      if (!refreshed) {
+        setSmartCategorySplitError(
+          "The split was saved, but the visible library still needs a refresh.",
+        );
+      }
+
+      setSmartCategorySplitOpen(false);
+      resetSmartCategorySplitState();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not apply this smart category split.";
+      setSmartCategorySplitError(message);
+      toast.error("Smart split failed", {
+        description: message,
+      });
+    } finally {
+      setIsSmartCategorySplitApplying(false);
+    }
+  }, [
+    activeOrganizationId,
+    loadLibrarySnapshot,
+    resetSmartCategorySplitState,
+    smartCategorySplitDraft,
+  ]);
+
   const handleSignOut = useCallback(async () => {
     await signOut({ redirect: false });
     toast.success("Signed out", {
@@ -4149,6 +4818,75 @@ export default function LibraryPageClient({
           : -SIDEBAR_KEYBOARD_STEP;
       setDesktopSidebarWidth((currentWidth) =>
         clampDesktopSidebarWidth(currentWidth + delta, window.innerWidth),
+      );
+    },
+    [isDesktopSidebarEnabled],
+  );
+
+  const handleWorkspaceRailResizeStart = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !isDesktopSidebarEnabled()) {
+        return;
+      }
+
+      event.preventDefault();
+      const pointerId = event.pointerId;
+      const handleElement = event.currentTarget;
+      const startX = event.clientX;
+      const startWidth = desktopWorkspaceRailWidth;
+      setIsWorkspaceRailResizing(true);
+      handleElement.setPointerCapture(pointerId);
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        const nextWidth = clampDesktopWorkspaceRailWidth(
+          startWidth + moveEvent.clientX - startX,
+          window.innerWidth,
+        );
+        queueWorkspaceRailWidthUpdate(nextWidth);
+      };
+
+      const stopResizing = () => {
+        setIsWorkspaceRailResizing(false);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        if (handleElement.hasPointerCapture(pointerId)) {
+          handleElement.releasePointerCapture(pointerId);
+        }
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", stopResizing);
+        window.removeEventListener("pointercancel", stopResizing);
+      };
+
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", stopResizing);
+      window.addEventListener("pointercancel", stopResizing);
+    },
+    [
+      desktopWorkspaceRailWidth,
+      isDesktopSidebarEnabled,
+      queueWorkspaceRailWidthUpdate,
+    ],
+  );
+
+  const handleWorkspaceRailResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!event.altKey || !isDesktopSidebarEnabled()) {
+        return;
+      }
+
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+
+      event.preventDefault();
+      const delta =
+        event.key === "ArrowRight"
+          ? SIDEBAR_KEYBOARD_STEP
+          : -SIDEBAR_KEYBOARD_STEP;
+      setDesktopWorkspaceRailWidth((currentWidth) =>
+        clampDesktopWorkspaceRailWidth(currentWidth + delta, window.innerWidth),
       );
     },
     [isDesktopSidebarEnabled],
@@ -6930,9 +7668,18 @@ export default function LibraryPageClient({
 
         <aside
           className={cn(
-            "hidden shrink-0 border-r border-border bg-card md:block",
-            isReallyCompactMode ? "w-9" : "w-56",
+            "group/workspace-sidebar relative hidden shrink-0 border-r border-border bg-card md:block",
+            isReallyCompactMode
+              ? "w-9"
+              : isWorkspaceRailResizing
+                ? ""
+                : "transition-[width] duration-200 ease-in-out",
           )}
+          style={
+            isReallyCompactMode
+              ? undefined
+              : { width: `${desktopWorkspaceRailWidth}px` }
+          }
           aria-label="Workspace navigation"
         >
           <WorkspaceRail
@@ -6951,6 +7698,25 @@ export default function LibraryPageClient({
             onRefresh={handleRefreshLibrary}
             resourceCountsByWorkspace={workspaceResourceCounts}
           />
+          {!isReallyCompactMode ? (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize workspace panel"
+              aria-valuemin={DESKTOP_WORKSPACE_RAIL_MIN_WIDTH}
+              aria-valuemax={desktopWorkspaceRailMaxWidth}
+              aria-valuenow={desktopWorkspaceRailWidth}
+              tabIndex={0}
+              onPointerDown={handleWorkspaceRailResizeStart}
+              onKeyDown={handleWorkspaceRailResizeKeyDown}
+              className={cn(
+                "absolute inset-y-0 right-0 z-10 w-4 translate-x-1/2 cursor-col-resize touch-none outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 after:rounded-full after:transition-colors after:duration-200 after:ease-in-out",
+                isWorkspaceRailResizing
+                  ? "after:bg-sidebar-ring"
+                  : "after:bg-transparent group-hover/workspace-sidebar:after:bg-sidebar-border/50 hover:after:bg-sidebar-border focus-visible:after:bg-sidebar-ring",
+              )}
+            />
+          ) : null}
         </aside>
 
         {!isReallyCompactMode ? (
@@ -6973,7 +7739,9 @@ export default function LibraryPageClient({
               canManageCategories={canManageCategories}
               onCreateCategory={handleOpenCreateCategoryDialog}
               canEditCategory={canEditCategoryByName}
+              canSmartSplitCategory={canSmartSplitCategoryByName}
               onEditCategory={handleOpenEditCategoryDialogByName}
+              onSmartSplitCategory={handleOpenSmartCategorySplitPreview}
               onDeleteCategory={(category) => {
                 void handleDeleteCategoryByName(category);
               }}
@@ -7106,7 +7874,9 @@ export default function LibraryPageClient({
               canManageCategories={canManageCategories}
               onCreateCategory={handleOpenCreateCategoryDialog}
               canEditCategory={canEditCategoryByName}
+              canSmartSplitCategory={canSmartSplitCategoryByName}
               onEditCategory={handleOpenEditCategoryDialogByName}
+              onSmartSplitCategory={handleOpenSmartCategorySplitPreview}
               onDeleteCategory={(category) => {
                 void handleDeleteCategoryByName(category);
               }}
@@ -7569,9 +8339,12 @@ export default function LibraryPageClient({
                     compactMode={isReallyCompactMode}
                     dragEnabled={canManageResources && !isSearchActive}
                     canManageResource={canManageResourceCard}
+                    canManageCategories={canManageCategories}
                     canEditCategoryByName={canEditCategoryByName}
+                    canSmartSplitCategory={canSmartSplitCategoryByName}
                     onSelectCategory={setActiveCategory}
                     onEditCategory={handleOpenEditCategoryDialogByName}
+                    onSmartSplitCategory={handleOpenSmartCategorySplitPreview}
                     onCreateResourceInCategory={handleOpenCreateResourceModalForCategory}
                     onPasteIntoCategory={handlePasteIntoCategory}
                     onDeleteCategory={(category) => {
@@ -7645,13 +8418,26 @@ export default function LibraryPageClient({
               </>
             ) : null}
             {canManageCategories ? (
-              <ContextMenuItem
-                disabled={!activeWorkspaceId}
-                onSelect={handleOpenCreateCategoryDialog}
-              >
-                <FolderPlus className="mr-2 h-4 w-4" />
-                Create category
-              </ContextMenuItem>
+              <>
+                <ContextMenuItem
+                  disabled={!activeWorkspaceId}
+                  onSelect={handleOpenCreateCategoryDialog}
+                >
+                  <FolderPlus className="mr-2 h-4 w-4" />
+                  Create category
+                </ContextMenuItem>
+                <ContextMenuItem
+                  disabled={!canSmartSplitCategoryByName(activeCategory)}
+                  onSelect={() => {
+                    if (activeCategory !== "All") {
+                      handleOpenSmartCategorySplitPreview(activeCategory);
+                    }
+                  }}
+                >
+                  <WandSparkles className="mr-2 h-4 w-4" />
+                  Smart split current category
+                </ContextMenuItem>
+              </>
             ) : null}
             <ContextMenuItem
               disabled={
@@ -9543,6 +10329,355 @@ export default function LibraryPageClient({
           >
             {isCategoryMutating ? "Saving..." : "Save Category"}
           </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={smartCategorySplitOpen}
+        onOpenChange={(open) => {
+          if (isSmartCategorySplitPreviewing || isSmartCategorySplitApplying) {
+            return;
+          }
+
+          setSmartCategorySplitOpen(open);
+          if (!open) {
+            resetSmartCategorySplitState();
+          }
+        }}
+      >
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
+          <DialogHeader>
+            <DialogTitle>Smart Split Category</DialogTitle>
+            <DialogDescription>
+              Preview the reorganization first, then rename buckets or move items
+              before anything is applied.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <Alert className="border-primary/20 bg-primary/5">
+              <WandSparkles className="h-4 w-4 text-primary" />
+              <AlertTitle>Dry run only until you apply</AlertTitle>
+              <AlertDescription>
+                We propose broad subcategories, but you stay in control. Rename
+                buckets, move individual items, add one manually if needed, and
+                choose which bucket keeps the original category slot.
+              </AlertDescription>
+            </Alert>
+
+            {isSmartCategorySplitPreviewing || isSmartCategorySplitApplying ? (
+              <Alert className="border-primary/20 bg-primary/5">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <AlertTitle>
+                  {isSmartCategorySplitPreviewing
+                    ? "Preparing smart split preview"
+                    : "Applying smart split"}
+                </AlertTitle>
+                <AlertDescription>
+                  {isSmartCategorySplitPreviewing
+                    ? "Analyzing the category and drafting broader target buckets now."
+                    : "Creating the new categories and moving resources into place."}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {smartCategorySplitError ? (
+              <Alert className="border-destructive/30 bg-destructive/5">
+                <CircleAlert className="h-4 w-4 text-destructive" />
+                <AlertTitle>Smart split needs attention</AlertTitle>
+                <AlertDescription>{smartCategorySplitError}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {smartCategorySplitDraft ? (
+              <>
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="rounded-xl border border-border/70 bg-card/60 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Source category
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {smartCategorySplitDraft.categoryName}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border/70 bg-card/60 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Resources
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {smartCategorySplitDraft.resourceCount}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border/70 bg-card/60 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Proposed categories
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {
+                        smartCategorySplitDraft.groups.filter(
+                          (group) => group.resources.length > 0,
+                        ).length
+                      }
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-border/70 bg-card/60 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Analysis
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {smartCategorySplitDraft.usedAi ? "AI-assisted" : "Heuristic fallback"}
+                    </p>
+                  </div>
+                </div>
+
+                {smartCategorySplitDraft.warnings.length > 0 ? (
+                  <Alert className="border-amber-500/30 bg-amber-500/5">
+                    <CircleAlert className="h-4 w-4 text-amber-600" />
+                    <AlertTitle>Preview warnings</AlertTitle>
+                    <AlertDescription className="space-y-1">
+                      {smartCategorySplitDraft.warnings.map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-card/60 p-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Adjust the proposed structure
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Keep it broad enough for future links. Empty categories are
+                      ignored unless you move items into them.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleSmartCategorySplitAddGroup}
+                      disabled={
+                        isSmartCategorySplitPreviewing ||
+                        isSmartCategorySplitApplying ||
+                        smartCategorySplitDraft.groups.length >= 6
+                      }
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add category
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRegenerateSmartCategorySplitPreview}
+                      disabled={
+                        !smartCategorySplitSource ||
+                        isSmartCategorySplitPreviewing ||
+                        isSmartCategorySplitApplying
+                      }
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Regenerate preview
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {smartCategorySplitDraft.groups.map((group) => {
+                    const isRetained =
+                      smartCategorySplitDraft.retainGroupKey === group.key;
+
+                    return (
+                      <div
+                        key={group.key}
+                        className={cn(
+                          "rounded-2xl border p-4",
+                          isRetained
+                            ? "border-primary/40 bg-primary/5"
+                            : "border-border/70 bg-card/60",
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <Label htmlFor={`smart-split-name-${group.key}`}>
+                                Target category
+                              </Label>
+                              <span className="rounded-full border border-border/70 bg-secondary/60 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                                {group.resources.length} item
+                                {group.resources.length === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                            <Input
+                              id={`smart-split-name-${group.key}`}
+                              value={group.name}
+                              onChange={(event) =>
+                                handleSmartCategorySplitRenameGroup(
+                                  group.key,
+                                  event.target.value,
+                                )
+                              }
+                              placeholder="Target category name"
+                              maxLength={80}
+                              disabled={isSmartCategorySplitApplying}
+                            />
+                            {group.reason ? (
+                              <p className="text-xs text-muted-foreground">
+                                {group.reason}
+                              </p>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">
+                                Manual category grouping.
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex shrink-0 flex-col items-stretch gap-2">
+                            <Button
+                              type="button"
+                              variant={isRetained ? "default" : "outline"}
+                              size="sm"
+                              onClick={() =>
+                                handleSmartCategorySplitRetainGroup(group.key)
+                              }
+                              disabled={
+                                isSmartCategorySplitApplying ||
+                                group.resources.length === 0
+                              }
+                            >
+                              {isRetained ? "Keeps original" : "Keep original"}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                handleSmartCategorySplitRemoveGroup(group.key)
+                              }
+                              disabled={
+                                isSmartCategorySplitApplying ||
+                                group.resources.length > 0
+                              }
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 max-h-[26rem] space-y-2 overflow-y-auto pr-1">
+                          {group.resources.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-border/70 bg-background/40 px-3 py-5 text-center text-xs text-muted-foreground">
+                              Move items here if you want to keep this extra
+                              category.
+                            </div>
+                          ) : (
+                            group.resources.map((resource) => (
+                              <div
+                                key={resource.resourceId}
+                                className="rounded-xl border border-border/70 bg-background/80 p-3"
+                              >
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-medium text-foreground">
+                                      {resource.label}
+                                    </p>
+                                    <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                                      {formatSmartSplitResourceMeta(resource.url)}
+                                    </p>
+                                    {resource.note ? (
+                                      <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                                        {resource.note}
+                                      </p>
+                                    ) : null}
+                                    {resource.tags.length > 0 ? (
+                                      <div className="mt-2 flex flex-wrap gap-1">
+                                        {resource.tags.map((tag) => (
+                                          <span
+                                            key={`${resource.resourceId}-${tag}`}
+                                            className="rounded-full border border-border/70 bg-secondary/55 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                                          >
+                                            {tag}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+
+                                  <div className="w-full shrink-0 lg:w-44">
+                                    <Label
+                                      htmlFor={`smart-split-move-${resource.resourceId}`}
+                                      className="text-[11px] text-muted-foreground"
+                                    >
+                                      Move to
+                                    </Label>
+                                    <select
+                                      id={`smart-split-move-${resource.resourceId}`}
+                                      value={group.key}
+                                      onChange={(event) =>
+                                        handleSmartCategorySplitMoveResource(
+                                          resource.resourceId,
+                                          event.target.value,
+                                        )
+                                      }
+                                      disabled={isSmartCategorySplitApplying}
+                                      className="mt-1 h-9 w-full rounded-md border border-border/70 bg-background px-3 text-sm text-foreground shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
+                                    >
+                                      {smartCategorySplitDraft.groups.map((targetGroup) => (
+                                        <option
+                                          key={`smart-split-target-${resource.resourceId}-${targetGroup.key}`}
+                                          value={targetGroup.key}
+                                        >
+                                          {targetGroup.name.trim() || "Untitled category"}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border/70 bg-card/40 px-4 py-8 text-center text-sm text-muted-foreground">
+                {isSmartCategorySplitPreviewing
+                  ? "Preparing the dry run preview now..."
+                  : "Open a category from the sidebar or board to preview a smart split."}
+              </div>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setSmartCategorySplitOpen(false);
+                  resetSmartCategorySplitState();
+                }}
+                disabled={isSmartCategorySplitPreviewing || isSmartCategorySplitApplying}
+              >
+                Close
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void handleApplySmartCategorySplit()}
+                disabled={
+                  !smartCategorySplitDraft ||
+                  isSmartCategorySplitPreviewing ||
+                  isSmartCategorySplitApplying
+                }
+              >
+                {isSmartCategorySplitApplying ? "Applying..." : "Apply split"}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

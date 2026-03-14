@@ -96,9 +96,12 @@ interface ResourceBoardProps {
   compactMode?: boolean
   dragEnabled: boolean
   canManageResource: (resource: ResourceCard) => boolean
+  canManageCategories?: boolean
   canEditCategoryByName: (category: string) => boolean
+  canSmartSplitCategory?: (category: string) => boolean
   onSelectCategory?: (category: string) => void
   onEditCategory: (category: string) => void
+  onSmartSplitCategory?: (category: string) => void
   onCreateResourceInCategory?: (category: string) => void
   onPasteIntoCategory?: (category: string) => void
   onDeleteCategory?: (category: string) => void
@@ -192,9 +195,12 @@ export function ResourceBoard({
   compactMode = false,
   dragEnabled,
   canManageResource,
+  canManageCategories = false,
   canEditCategoryByName,
+  canSmartSplitCategory,
   onSelectCategory,
   onEditCategory,
+  onSmartSplitCategory,
   onCreateResourceInCategory,
   onPasteIntoCategory,
   onDeleteCategory,
@@ -391,6 +397,8 @@ export function ResourceBoard({
   const renderColumnContextMenu = useCallback(
     (column: ResourceBoardColumn, content: React.ReactNode) => {
       const canCustomizeCategory = canEditCategoryByName(column.name)
+      const canDeleteCategory = canManageCategories && Boolean(onDeleteCategory)
+      const canSplitCategory = canSmartSplitCategory?.(column.name) ?? false
 
       return (
         <ContextMenu key={column.id ?? column.name}>
@@ -426,10 +434,19 @@ export function ResourceBoard({
                 Customize category
               </ContextMenuItem>
             ) : null}
-            {canCustomizeCategory && onDeleteCategory ? (
+            {onSmartSplitCategory ? (
+              <ContextMenuItem
+                disabled={!canSplitCategory}
+                onSelect={() => onSmartSplitCategory(column.name)}
+              >
+                <Sparkles className="mr-2 h-4 w-4" />
+                Smart split category
+              </ContextMenuItem>
+            ) : null}
+            {canDeleteCategory ? (
               <ContextMenuItem
                 className="text-destructive focus:text-destructive"
-                onSelect={() => onDeleteCategory(column.name)}
+                onSelect={() => onDeleteCategory?.(column.name)}
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete category
@@ -449,10 +466,13 @@ export function ResourceBoard({
       )
     },
     [
+      canManageCategories,
       canEditCategoryByName,
+      canSmartSplitCategory,
       onCreateResourceInCategory,
       onDeleteCategory,
       onEditCategory,
+      onSmartSplitCategory,
       onPasteIntoCategory,
       onRefresh,
       onSelectCategory,

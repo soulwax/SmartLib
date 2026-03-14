@@ -36,6 +36,7 @@ import {
   ClipboardPaste,
   Copy,
   FolderPlus,
+  Sparkles,
   Search,
   Pencil,
   Settings,
@@ -75,6 +76,8 @@ interface CategorySidebarProps {
   canEditCategory?: (category: string) => boolean;
   onEditCategory?: (category: string) => void;
   onDeleteCategory?: (category: string) => void;
+  canSmartSplitCategory?: (category: string) => boolean;
+  onSmartSplitCategory?: (category: string) => void;
   canPasteIntoCategory?: boolean;
   onPasteIntoCategory?: (category: string) => void;
   canDropLinkItems?: boolean;
@@ -125,6 +128,8 @@ export function CategorySidebar({
   canEditCategory,
   onEditCategory,
   onDeleteCategory,
+  canSmartSplitCategory,
+  onSmartSplitCategory,
   canPasteIntoCategory = false,
   onPasteIntoCategory,
   canDropLinkItems = false,
@@ -260,6 +265,7 @@ export function CategorySidebar({
               const isActive = activeCategory === cat;
               const isEditableByOwner =
                 cat !== "All" && (canEditCategory?.(cat) ?? false);
+              const canSmartSplit = cat !== "All" && (canSmartSplitCategory?.(cat) ?? false);
               const symbol = categorySymbols[cat];
               const count =
                 cat === "All"
@@ -386,6 +392,15 @@ export function CategorySidebar({
                       <ContextMenuItem onSelect={() => onEditCategory?.(cat)}>
                         <Pencil className="mr-2 h-4 w-4" />
                         Edit Category
+                      </ContextMenuItem>
+                    ) : null}
+                    {cat !== "All" && onSmartSplitCategory ? (
+                      <ContextMenuItem
+                        disabled={!canSmartSplit}
+                        onSelect={() => onSmartSplitCategory(cat)}
+                      >
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Smart split category
                       </ContextMenuItem>
                     ) : null}
 

@@ -40,7 +40,7 @@ const tobyImportSchema = z.object({
   workspaceId: z.string().uuid().optional(),
   createWorkspace: z.boolean().optional().default(false),
   workspaceName: z.string().trim().min(1).max(80).optional(),
-  sourceName: z.string().trim().max(200).optional(),
+  sourceName: z.string().trim().optional(),
   previewOnly: z.boolean().optional().default(false),
   skipExactDuplicates: z.boolean().optional().default(true),
   content: z.string().trim().min(1).max(2_000_000),

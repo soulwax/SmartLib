@@ -4677,6 +4677,9 @@ export default function LibraryPageClient({
     try {
       const response = await fetch(
         `/api/import/toby/batches?workspaceId=${encodeURIComponent(resolvedActiveWorkspaceId)}`,
+        {
+          cache: "no-store",
+        },
       );
       const payload = await readJson<TobyImportBatchesResponse>(response);
 

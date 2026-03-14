@@ -4,6 +4,7 @@ import { z } from "zod"
 import { auth } from "@/auth"
 import { createApiErrorResponse } from "@/lib/api-error"
 import {
+  isTobyImportBatchStorageAvailable,
   isTobyImportBatchStorageUnavailableError,
   listRecentTobyImportBatches,
 } from "@/lib/toby-import-batch-service"
@@ -41,6 +42,13 @@ export async function GET(request: Request) {
   }
 
   try {
+    if (!isTobyImportBatchStorageAvailable()) {
+      return NextResponse.json({
+        batches: [],
+        storageAvailable: false,
+      })
+    }
+
     const url = new URL(request.url)
     const query = querySchema.parse({
       workspaceId: url.searchParams.get("workspaceId") ?? undefined,

@@ -9,6 +9,7 @@ import { hasDatabaseEnv } from "@/lib/env"
 import { deleteResourceService } from "@/lib/resource-service"
 
 const DEFAULT_BATCH_LIMIT = 6
+const ROLLBACK_ARCHIVE_CONCURRENCY = 12
 
 export interface TobyImportBatchSummary {
   id: string
@@ -117,6 +118,10 @@ export function isTobyImportBatchStorageUnavailableError(error: unknown): boolea
   )
 }
 
+export function isTobyImportBatchStorageAvailable(): boolean {
+  return hasDatabaseEnv()
+}
+
 export async function createTobyImportBatch(input: {
   actorUserId: string
   actorIdentifier: string
@@ -145,7 +150,9 @@ export async function createTobyImportBatch(input: {
       workspaceId: input.workspaceId,
       organizationId: input.organizationId ?? null,
       workspaceName: input.workspaceName,
-      sourceName: input.sourceName?.trim() ? input.sourceName.trim() : null,
+      sourceName: input.sourceName?.trim()
+        ? input.sourceName.trim().slice(0, 200)
+        : null,
       createdWorkspaceId: input.createdWorkspaceId ?? null,
       importedLists: input.importedLists,
       importedCards: input.importedCards,
@@ -264,6 +271,7 @@ export async function rollbackTobyImportBatch(input: {
   let alreadyArchivedResources = 0
   let missingResources = 0
   let failedResources = 0
+  const resourceIdsToArchive: string[] = []
 
   for (const resourceId of resourceIds) {
     const resource = resourcesById.get(resourceId)
@@ -278,20 +286,41 @@ export async function rollbackTobyImportBatch(input: {
       continue
     }
 
-    try {
-      await deleteResourceService(resourceId, {
-        userId: input.actorUserId,
-        identifier: input.actorIdentifier,
-      })
-      archivedResources += 1
-    } catch (error) {
-      console.error("Failed to archive resource during toby import rollback", {
+    resourceIdsToArchive.push(resourceId)
+  }
+
+  for (
+    let index = 0;
+    index < resourceIdsToArchive.length;
+    index += ROLLBACK_ARCHIVE_CONCURRENCY
+  ) {
+    const chunk = resourceIdsToArchive.slice(
+      index,
+      index + ROLLBACK_ARCHIVE_CONCURRENCY,
+    )
+    const settled = await Promise.allSettled(
+      chunk.map(async (resourceId) => {
+        await deleteResourceService(resourceId, {
+          userId: input.actorUserId,
+          identifier: input.actorIdentifier,
+        })
+      }),
+    )
+
+    settled.forEach((result, offset) => {
+      if (result.status === "fulfilled") {
+        archivedResources += 1
+        return
+      }
+
+      const resourceId = chunk[offset]
+      console.error("Failed to archive resource during Toby import rollback", {
         resourceId,
         batchId: input.batchId,
-        error,
+        error: result.reason,
       })
       failedResources += 1
-    }
+    })
   }
 
   const remainingActiveResources =

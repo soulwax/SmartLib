@@ -1,4 +1,4 @@
-import { relations, sql } from "drizzle-orm"
+import { desc, relations, sql } from "drizzle-orm"
 import {
   boolean,
   check,
@@ -476,6 +476,101 @@ export const faviconCache = pgTable(
     ),
     index("favicon_cache_last_checked_at_idx").on(table.lastCheckedAt),
     index("favicon_cache_next_check_at_idx").on(table.nextCheckAt),
+  ]
+)
+
+export const tobyImportBatches = pgTable(
+  "toby_import_batches",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdByUserId: uuid("created_by_user_id").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
+    createdByIdentifier: text("created_by_identifier").notNull(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => resourceWorkspaces.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(
+      () => resourceOrganizations.id,
+      {
+        onDelete: "set null",
+      }
+    ),
+    workspaceName: text("workspace_name").notNull(),
+    sourceName: text("source_name"),
+    createdWorkspaceId: uuid("created_workspace_id").references(
+      () => resourceWorkspaces.id,
+      {
+        onDelete: "set null",
+      }
+    ),
+    importedLists: integer("imported_lists").notNull().default(0),
+    importedCards: integer("imported_cards").notNull().default(0),
+    importedResources: integer("imported_resources").notNull().default(0),
+    skippedExactDuplicates: integer("skipped_exact_duplicates")
+      .notNull()
+      .default(0),
+    failed: integer("failed").notNull().default(0),
+    resourceIds: jsonb("resource_ids")
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    rolledBackAt: timestamp("rolled_back_at", { withTimezone: true }),
+    rolledBackByUserId: uuid("rolled_back_by_user_id").references(
+      () => appUsers.id,
+      {
+        onDelete: "set null",
+      }
+    ),
+    rolledBackByIdentifier: text("rolled_back_by_identifier"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      "toby_import_batches_created_by_identifier_length_check",
+      sql`char_length(${table.createdByIdentifier}) <= 320`
+    ),
+    check(
+      "toby_import_batches_workspace_name_length_check",
+      sql`char_length(${table.workspaceName}) <= 80`
+    ),
+    check(
+      "toby_import_batches_source_name_length_check",
+      sql`${table.sourceName} IS NULL OR char_length(${table.sourceName}) <= 200`
+    ),
+    check(
+      "toby_import_batches_rolled_back_by_identifier_length_check",
+      sql`${table.rolledBackByIdentifier} IS NULL OR char_length(${table.rolledBackByIdentifier}) <= 320`
+    ),
+    check(
+      "toby_import_batches_imported_lists_check",
+      sql`${table.importedLists} >= 0`
+    ),
+    check(
+      "toby_import_batches_imported_cards_check",
+      sql`${table.importedCards} >= 0`
+    ),
+    check(
+      "toby_import_batches_imported_resources_check",
+      sql`${table.importedResources} >= 0`
+    ),
+    check(
+      "toby_import_batches_skipped_exact_duplicates_check",
+      sql`${table.skippedExactDuplicates} >= 0`
+    ),
+    check("toby_import_batches_failed_check", sql`${table.failed} >= 0`),
+    index("toby_import_batches_created_at_idx").on(desc(table.createdAt)),
+    index("toby_import_batches_created_by_user_id_created_at_idx").on(
+      table.createdByUserId,
+      desc(table.createdAt)
+    ),
+    index("toby_import_batches_workspace_id_created_at_idx").on(
+      table.workspaceId,
+      desc(table.createdAt)
+    ),
+    index("toby_import_batches_rolled_back_at_idx").on(table.rolledBackAt),
   ]
 )
 

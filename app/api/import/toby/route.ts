@@ -6,14 +6,14 @@ import { createApiErrorResponse, readRequestJson } from "@/lib/api-error"
 import { canCreateResources, deriveUserRole } from "@/lib/authorization"
 import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
+  buildExactDuplicateKey,
+  detectLinkDuplicates,
+} from "@/lib/link-duplicate-detection"
+import {
   asRateLimitJsonResponse,
   assertRequestRateLimit,
   RATE_LIMIT_RULES,
 } from "@/lib/rate-limit"
-import {
-  buildExactDuplicateKey,
-  detectLinkDuplicates,
-} from "@/lib/link-duplicate-detection"
 import {
   ResourceOrganizationNotFoundError,
   ResourceWorkspaceAlreadyExistsError,
@@ -27,6 +27,10 @@ import {
   listResourceWorkspacesService,
 } from "@/lib/resource-service"
 import { parseTobyJsonImport } from "@/lib/toby-import"
+import {
+  createTobyImportBatch,
+  isTobyImportBatchStorageUnavailableError,
+} from "@/lib/toby-import-batch-service"
 
 export const runtime = "nodejs"
 const DUPLICATE_SAMPLE_LIMIT = 5
@@ -36,6 +40,7 @@ const tobyImportSchema = z.object({
   workspaceId: z.string().uuid().optional(),
   createWorkspace: z.boolean().optional().default(false),
   workspaceName: z.string().trim().min(1).max(80).optional(),
+  sourceName: z.string().trim().max(200).optional(),
   previewOnly: z.boolean().optional().default(false),
   skipExactDuplicates: z.boolean().optional().default(true),
   content: z.string().trim().min(1).max(2_000_000),
@@ -93,6 +98,8 @@ async function assertVisibleWorkspace(
   if (!workspaces.some((workspace) => workspace.id === workspaceId)) {
     throw new ResourceWorkspaceNotFoundError(workspaceId)
   }
+
+  return workspaces.find((workspace) => workspace.id === workspaceId) ?? null
 }
 
 export async function POST(request: Request) {
@@ -127,6 +134,9 @@ export async function POST(request: Request) {
       ReturnType<typeof createResourceWorkspaceService>
     >["workspace"] | null = null
     let targetWorkspaceId = input.workspaceId ?? null
+    let targetWorkspace: Awaited<
+      ReturnType<typeof createResourceWorkspaceService>
+    >["workspace"] | null = null
     const inFileDuplicateIndexes = new Set<number>()
     const inFileDuplicateSamples: Array<{
       url: string
@@ -167,6 +177,7 @@ export async function POST(request: Request) {
       mode = workspaceResult.mode
       createdWorkspace = workspaceResult.workspace
       targetWorkspaceId = workspaceResult.workspace.id
+      targetWorkspace = workspaceResult.workspace
     }
 
     if (!targetWorkspaceId) {
@@ -187,10 +198,12 @@ export async function POST(request: Request) {
       return errorResponse("No workspace was selected for the import.", 400)
     }
 
-    await assertVisibleWorkspace(targetWorkspaceId, {
-      userId: session.user.id,
-      includeAllWorkspaces: session.user.isFirstAdmin === true,
-    })
+    targetWorkspace =
+      targetWorkspace ??
+      (await assertVisibleWorkspace(targetWorkspaceId, {
+        userId: session.user.id,
+        includeAllWorkspaces: session.user.isFirstAdmin === true,
+      }))
 
     const resourceLinks = parsedImport.resources.map((resource) => resource.links[0])
     const { mode: analysisMode, resources: existingResources } =
@@ -263,6 +276,7 @@ export async function POST(request: Request) {
     let importedResources = 0
     let failed = 0
     let skippedExactDuplicates = 0
+    const createdResourceIds: string[] = []
 
     for (const [index, resource] of parsedImport.resources.entries()) {
       if (
@@ -286,11 +300,17 @@ export async function POST(request: Request) {
         )
         mode = result.mode
         importedResources += 1
+        createdResourceIds.push(result.resource.id)
       } catch (error) {
         if (error instanceof ResourceWorkspaceNotFoundError) {
           throw error
         }
 
+        console.error("Failed to import Toby card", {
+          error,
+          workspaceId: targetWorkspaceId,
+          index,
+        })
         failed += 1
       }
     }
@@ -304,6 +324,37 @@ export async function POST(request: Request) {
           failed,
         },
       })
+    }
+
+    let importBatch = null
+    let rollbackAvailable = false
+
+    if (createdResourceIds.length > 0 && targetWorkspace) {
+      try {
+        importBatch = await createTobyImportBatch({
+          actorUserId: session.user.id,
+          actorIdentifier: session.user.email ?? session.user.id,
+          workspaceId: targetWorkspace.id,
+          organizationId:
+            targetWorkspace.organizationId ?? input.organizationId ?? null,
+          workspaceName: targetWorkspace.name,
+          sourceName: input.sourceName,
+          createdWorkspaceId: createdWorkspace?.id ?? null,
+          importedLists: parsedImport.importedLists,
+          importedCards: parsedImport.importedCards,
+          importedResources,
+          skippedExactDuplicates,
+          failed,
+          resourceIds: createdResourceIds,
+        })
+        rollbackAvailable = importBatch !== null
+      } catch (error) {
+        rollbackAvailable = false
+
+        if (!isTobyImportBatchStorageUnavailableError(error)) {
+          console.error("Failed to record Toby import batch:", error)
+        }
+      }
     }
 
     return NextResponse.json(
@@ -322,6 +373,8 @@ export async function POST(request: Request) {
         duplicateSamples,
         importedResources,
         failed,
+        importBatch,
+        rollbackAvailable,
       },
       { status: importedResources > 0 ? 201 : 200 },
     )

@@ -373,6 +373,8 @@ interface TobyImportResponse extends ApiErrorResponse {
   workspace?: ResourceWorkspace;
   workspaceId?: string | null;
   organizationId?: string | null;
+  importBatch?: TobyImportBatchSummary | null;
+  rollbackAvailable?: boolean;
   exactDuplicateCount?: number;
   inFileDuplicateCount?: number;
   inFileDuplicateSamples?: Array<{
@@ -396,6 +398,25 @@ interface TobyImportResponse extends ApiErrorResponse {
   failed?: number;
 }
 
+interface TobyImportBatchSummary {
+  id: string;
+  workspaceId: string;
+  organizationId: string | null;
+  workspaceName: string;
+  sourceName: string | null;
+  createdWorkspaceId: string | null;
+  createdByUserId: string | null;
+  createdByIdentifier: string;
+  importedLists: number;
+  importedCards: number;
+  importedResources: number;
+  skippedExactDuplicates: number;
+  failed: number;
+  resourceCount: number;
+  rolledBackAt: string | null;
+  createdAt: string;
+}
+
 interface TobyImportPreviewState {
   importedLists: number;
   importedCards: number;
@@ -403,6 +424,21 @@ interface TobyImportPreviewState {
   inFileDuplicateCount: number;
   inFileDuplicateSamples: NonNullable<TobyImportResponse["inFileDuplicateSamples"]>;
   duplicateSamples: NonNullable<TobyImportResponse["duplicateSamples"]>;
+}
+
+interface TobyImportBatchesResponse extends ApiErrorResponse {
+  batches?: TobyImportBatchSummary[];
+  storageAvailable?: boolean;
+}
+
+interface TobyImportRollbackResponse extends ApiErrorResponse {
+  batch?: TobyImportBatchSummary;
+  archivedResources?: number;
+  alreadyArchivedResources?: number;
+  missingResources?: number;
+  failedResources?: number;
+  remainingActiveResources?: number;
+  alreadyRolledBack?: boolean;
 }
 
 interface MoveItemResponse extends ApiErrorResponse {
@@ -445,6 +481,19 @@ async function readJson<T>(response: Response): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "Unknown time";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "Unknown time";
+  }
+
+  return parsed.toLocaleString();
 }
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar-width";
@@ -975,11 +1024,24 @@ export default function LibraryPageClient({
   const [isTobyImportPreviewing, setIsTobyImportPreviewing] = useState(false);
   const [tobyImportPreview, setTobyImportPreview] =
     useState<TobyImportPreviewState | null>(null);
+  const [tobyImportBatches, setTobyImportBatches] = useState<
+    TobyImportBatchSummary[]
+  >([]);
+  const [isTobyImportHistoryLoading, setIsTobyImportHistoryLoading] =
+    useState(false);
+  const [tobyImportHistoryAvailable, setTobyImportHistoryAvailable] =
+    useState(true);
+  const [tobyImportHistoryError, setTobyImportHistoryError] = useState<
+    string | null
+  >(null);
   const [aiInboxItems, setAiInboxItems] = useState<AiInboxItem[]>([]);
   const [aiInboxUseAi, setAiInboxUseAi] = useState(true);
   const [isAiInboxAnalyzing, setIsAiInboxAnalyzing] = useState(false);
   const [isAiInboxImporting, setIsAiInboxImporting] = useState(false);
   const [isTobyImporting, setIsTobyImporting] = useState(false);
+  const [tobyRollbackBatchId, setTobyRollbackBatchId] = useState<string | null>(
+    null,
+  );
   const [isAiInboxMerging, setIsAiInboxMerging] = useState(false);
   const [isAiInboxRenamingCategories, setIsAiInboxRenamingCategories] =
     useState(false);
@@ -4562,6 +4624,7 @@ export default function LibraryPageClient({
     setTobyImportWorkspaceName(suggestTobyWorkspaceName(tobyImportFileName));
     setTobyImportSkipExactDuplicates(true);
     setTobyImportPreview(null);
+    setTobyImportHistoryError(null);
     setTobyImportOpen(true);
   }, [
     canCreateWorkspaces,
@@ -4595,6 +4658,60 @@ export default function LibraryPageClient({
     [],
   );
 
+  const loadTobyImportBatches = useCallback(async () => {
+    if (!session?.user?.id) {
+      setTobyImportBatches([]);
+      setTobyImportHistoryAvailable(false);
+      setTobyImportHistoryError(null);
+      return;
+    }
+
+    if (!resolvedActiveWorkspaceId) {
+      setTobyImportBatches([]);
+      setTobyImportHistoryAvailable(true);
+      setTobyImportHistoryError(null);
+      return;
+    }
+
+    setIsTobyImportHistoryLoading(true);
+    try {
+      const response = await fetch(
+        `/api/import/toby/batches?workspaceId=${encodeURIComponent(resolvedActiveWorkspaceId)}`,
+      );
+      const payload = await readJson<TobyImportBatchesResponse>(response);
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to load recent Toby imports.");
+      }
+
+      setTobyImportBatches(payload?.batches ?? []);
+      setTobyImportHistoryAvailable(payload?.storageAvailable !== false);
+      setTobyImportHistoryError(
+        payload?.storageAvailable === false
+          ? "Import rollback becomes available after the latest database migration runs."
+          : null,
+      );
+    } catch (error) {
+      setTobyImportBatches([]);
+      setTobyImportHistoryAvailable(true);
+      setTobyImportHistoryError(
+        error instanceof Error
+          ? error.message
+          : "Could not load recent Toby imports.",
+      );
+    } finally {
+      setIsTobyImportHistoryLoading(false);
+    }
+  }, [resolvedActiveWorkspaceId, session?.user?.id]);
+
+  useEffect(() => {
+    if (!tobyImportOpen) {
+      return;
+    }
+
+    void loadTobyImportBatches();
+  }, [loadTobyImportBatches, tobyImportOpen]);
+
   const buildTobyImportPayload = useCallback(
     (previewOnly: boolean) => ({
       organizationId: resolvedActiveOrganizationId,
@@ -4605,6 +4722,7 @@ export default function LibraryPageClient({
       workspaceName: tobyImportCreateWorkspace
         ? tobyImportWorkspaceName.trim()
         : undefined,
+      sourceName: tobyImportFileName ?? undefined,
       previewOnly,
       skipExactDuplicates: tobyImportSkipExactDuplicates,
       content: tobyImportRawInput,
@@ -4613,6 +4731,7 @@ export default function LibraryPageClient({
       resolvedActiveOrganizationId,
       resolvedActiveWorkspaceId,
       tobyImportCreateWorkspace,
+      tobyImportFileName,
       tobyImportRawInput,
       tobyImportSkipExactDuplicates,
       tobyImportWorkspaceName,
@@ -4687,6 +4806,97 @@ export default function LibraryPageClient({
     tobyImportWorkspaceName,
   ]);
 
+  const handleRollbackTobyImportBatch = useCallback(
+    async (batch: TobyImportBatchSummary) => {
+      if (!resolvedActiveWorkspaceId || !resolvedActiveOrganizationId) {
+        toast.error("Workspace unavailable", {
+          description: "Refresh the library and choose a current workspace first.",
+        });
+        return;
+      }
+
+      if (batch.rolledBackAt) {
+        toast("Already rolled back", {
+          description: "This Toby import batch was already archived earlier.",
+        });
+        return;
+      }
+
+      if (
+        typeof window !== "undefined" &&
+        !window.confirm(
+          `Archive the ${batch.importedResources} imported card(s) from this Toby import? The workspace will remain.`,
+        )
+      ) {
+        return;
+      }
+
+      setTobyRollbackBatchId(batch.id);
+      try {
+        const response = await fetch(
+          `/api/import/toby/batches/${batch.id}/rollback`,
+          {
+            method: "POST",
+          },
+        );
+        const payload = await readJson<TobyImportRollbackResponse>(response);
+
+        if (!response.ok) {
+          throw new Error(
+            payload?.error ?? "Failed to roll back this Toby import.",
+          );
+        }
+
+        await loadLibrarySnapshot({
+          organizationId: resolvedActiveOrganizationId,
+          workspaceId: resolvedActiveWorkspaceId,
+        });
+        await loadTobyImportBatches();
+
+        const archivedResources = payload?.archivedResources ?? 0;
+        const alreadyArchivedResources =
+          payload?.alreadyArchivedResources ?? 0;
+        const missingResources = payload?.missingResources ?? 0;
+        const failedResources = payload?.failedResources ?? 0;
+        const remainingActiveResources =
+          payload?.remainingActiveResources ?? 0;
+
+        if (payload?.alreadyRolledBack) {
+          toast("Already rolled back", {
+            description: "This Toby import batch had already been archived.",
+          });
+          return;
+        }
+
+        if (remainingActiveResources > 0 || failedResources > 0) {
+          toast.error("Toby rollback incomplete", {
+            description: `${archivedResources} archived, ${failedResources} failed${alreadyArchivedResources > 0 ? `, ${alreadyArchivedResources} already archived` : ""}${missingResources > 0 ? `, ${missingResources} missing` : ""}.`,
+          });
+          return;
+        }
+
+        toast.success("Toby import rolled back", {
+          description: `${archivedResources} card(s) archived${alreadyArchivedResources > 0 ? `, ${alreadyArchivedResources} already archived` : ""}${missingResources > 0 ? `, ${missingResources} missing` : ""}.`,
+        });
+      } catch (error) {
+        toast.error("Rollback failed", {
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not roll back this Toby import.",
+        });
+      } finally {
+        setTobyRollbackBatchId(null);
+      }
+    },
+    [
+      loadLibrarySnapshot,
+      loadTobyImportBatches,
+      resolvedActiveOrganizationId,
+      resolvedActiveWorkspaceId,
+    ],
+  );
+
   const handleImportTobyJson = useCallback(async () => {
     if (!canManageResources) {
       return;
@@ -4755,9 +4965,10 @@ export default function LibraryPageClient({
       const failed = payload?.failed ?? 0;
       const skippedExactDuplicates = payload?.skippedExactDuplicates ?? 0;
       const importedWorkspaceName = payload?.workspace?.name;
+      const rollbackAvailable = payload?.rollbackAvailable !== false;
 
       toast.success("Toby import complete", {
-        description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${importedWorkspaceName ? ` into ${importedWorkspaceName}` : ""}${skippedExactDuplicates > 0 ? `, ${skippedExactDuplicates} exact duplicate(s) skipped` : ""}${failed > 0 ? `, ${failed} failed.` : "."}`,
+        description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${importedWorkspaceName ? ` into ${importedWorkspaceName}` : ""}${skippedExactDuplicates > 0 ? `, ${skippedExactDuplicates} exact duplicate(s) skipped` : ""}${failed > 0 ? `, ${failed} failed` : ""}${rollbackAvailable ? "." : ". Rollback history is not available for this import yet."}`,
       });
     } catch (error) {
       toast.error("Toby import failed", {
@@ -7050,6 +7261,10 @@ export default function LibraryPageClient({
             setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
             setTobyImportSkipExactDuplicates(true);
             setTobyImportPreview(null);
+            setTobyImportBatches([]);
+            setTobyImportHistoryAvailable(true);
+            setTobyImportHistoryError(null);
+            setTobyRollbackBatchId(null);
           }
         }}
       >
@@ -7210,6 +7425,94 @@ export default function LibraryPageClient({
                     </p>
                   ) : null}
                 </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border/70 bg-card/50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Recent Toby imports
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Rollback archives the cards created by an import batch. It
+                    does not delete the workspace.
+                  </p>
+                </div>
+                {isTobyImportHistoryLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                ) : null}
+              </div>
+
+              {!resolvedActiveWorkspaceId ? (
+                <p className="text-xs text-muted-foreground">
+                  Select a workspace to see recent imports that can be rolled back.
+                </p>
+              ) : null}
+
+              {tobyImportHistoryError ? (
+                <p className="text-xs text-muted-foreground">
+                  {tobyImportHistoryError}
+                </p>
+              ) : null}
+
+              {resolvedActiveWorkspaceId && !tobyImportHistoryError ? (
+                !tobyImportHistoryAvailable ? (
+                  <p className="text-xs text-muted-foreground">
+                    Import rollback becomes available after the latest database
+                    migration runs.
+                  </p>
+                ) : tobyImportBatches.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No recent Toby imports for this workspace yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {tobyImportBatches.map((batch) => (
+                      <div
+                        key={batch.id}
+                        className="flex items-start justify-between gap-3 rounded-md border border-border/60 bg-background/40 p-3"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {batch.sourceName?.trim() || "Toby JSON import"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {batch.importedResources} imported
+                            {batch.skippedExactDuplicates > 0
+                              ? ` · ${batch.skippedExactDuplicates} skipped`
+                              : ""}
+                            {batch.failed > 0 ? ` · ${batch.failed} failed` : ""}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatDateTime(batch.createdAt)}
+                            {batch.rolledBackAt
+                              ? ` · Rolled back ${formatDateTime(batch.rolledBackAt)}`
+                              : ""}
+                          </p>
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleRollbackTobyImportBatch(batch)}
+                          disabled={
+                            isTobyImporting ||
+                            tobyRollbackBatchId === batch.id ||
+                            Boolean(batch.rolledBackAt)
+                          }
+                        >
+                          {tobyRollbackBatchId === batch.id
+                            ? "Rolling back..."
+                            : batch.rolledBackAt
+                              ? "Rolled back"
+                              : "Rollback"}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )
               ) : null}
             </div>
 

@@ -911,6 +911,49 @@ export async function ensureSchema() {
       CREATE INDEX IF NOT EXISTS favicon_cache_next_check_at_idx
       ON favicon_cache (next_check_at ASC)
     `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS toby_import_batches (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        created_by_user_id UUID REFERENCES app_users(id) ON DELETE SET NULL,
+        created_by_identifier TEXT NOT NULL CHECK (char_length(created_by_identifier) <= 320),
+        workspace_id UUID NOT NULL REFERENCES resource_workspaces(id) ON DELETE CASCADE,
+        organization_id UUID REFERENCES resource_organizations(id) ON DELETE SET NULL,
+        workspace_name TEXT NOT NULL CHECK (char_length(workspace_name) <= 80),
+        source_name TEXT CHECK (source_name IS NULL OR char_length(source_name) <= 200),
+        created_workspace_id UUID REFERENCES resource_workspaces(id) ON DELETE SET NULL,
+        imported_lists INTEGER NOT NULL DEFAULT 0 CHECK (imported_lists >= 0),
+        imported_cards INTEGER NOT NULL DEFAULT 0 CHECK (imported_cards >= 0),
+        imported_resources INTEGER NOT NULL DEFAULT 0 CHECK (imported_resources >= 0),
+        skipped_exact_duplicates INTEGER NOT NULL DEFAULT 0 CHECK (skipped_exact_duplicates >= 0),
+        failed INTEGER NOT NULL DEFAULT 0 CHECK (failed >= 0),
+        resource_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        rolled_back_at TIMESTAMPTZ,
+        rolled_back_by_user_id UUID REFERENCES app_users(id) ON DELETE SET NULL,
+        rolled_back_by_identifier TEXT CHECK (rolled_back_by_identifier IS NULL OR char_length(rolled_back_by_identifier) <= 320),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS toby_import_batches_created_at_idx
+      ON toby_import_batches (created_at DESC)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS toby_import_batches_created_by_user_id_created_at_idx
+      ON toby_import_batches (created_by_user_id, created_at DESC)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS toby_import_batches_workspace_id_created_at_idx
+      ON toby_import_batches (workspace_id, created_at DESC)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS toby_import_batches_rolled_back_at_idx
+      ON toby_import_batches (rolled_back_at ASC)
+    `;
   })();
 
   await schemaReady;

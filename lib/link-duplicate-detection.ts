@@ -168,6 +168,10 @@ function parseComparableUrl(url: string): ParsedComparableUrl | null {
   }
 }
 
+export function buildExactDuplicateKey(url: string): string | null {
+  return parseComparableUrl(url)?.key ?? null
+}
+
 function compareLinkToExisting(
   input: CandidateLink,
   existing: { url: string; label: string }

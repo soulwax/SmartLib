@@ -374,6 +374,11 @@ interface TobyImportResponse extends ApiErrorResponse {
   workspaceId?: string | null;
   organizationId?: string | null;
   exactDuplicateCount?: number;
+  inFileDuplicateCount?: number;
+  inFileDuplicateSamples?: Array<{
+    url: string;
+    label: string;
+  }>;
   skippedExactDuplicates?: number;
   duplicateSamples?: Array<{
     url: string;
@@ -395,6 +400,8 @@ interface TobyImportPreviewState {
   importedLists: number;
   importedCards: number;
   exactDuplicateCount: number;
+  inFileDuplicateCount: number;
+  inFileDuplicateSamples: NonNullable<TobyImportResponse["inFileDuplicateSamples"]>;
   duplicateSamples: NonNullable<TobyImportResponse["duplicateSamples"]>;
 }
 
@@ -4657,6 +4664,8 @@ export default function LibraryPageClient({
         importedLists: payload?.importedLists ?? 0,
         importedCards: payload?.importedCards ?? 0,
         exactDuplicateCount: payload?.exactDuplicateCount ?? 0,
+        inFileDuplicateCount: payload?.inFileDuplicateCount ?? 0,
+        inFileDuplicateSamples: payload?.inFileDuplicateSamples ?? [],
         duplicateSamples: payload?.duplicateSamples ?? [],
       });
     } catch (error) {
@@ -7148,13 +7157,14 @@ export default function LibraryPageClient({
                     Skip exact duplicates
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Ignore links that already exist in the target workspace.
+                    Ignore links that already exist in the target workspace or
+                    appear more than once in this import file.
                   </p>
                 </div>
                 <Switch
                   checked={tobyImportSkipExactDuplicates}
                   onCheckedChange={setTobyImportSkipExactDuplicates}
-                  disabled={isTobyImporting || tobyImportCreateWorkspace}
+                  disabled={isTobyImporting}
                   aria-label="Skip exact duplicate links during Toby import"
                 />
               </div>
@@ -7164,9 +7174,8 @@ export default function LibraryPageClient({
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <span>{tobyImportPreview.importedLists} list(s)</span>
                     <span>{tobyImportPreview.importedCards} card(s)</span>
-                    <span>
-                      {tobyImportPreview.exactDuplicateCount} exact duplicate(s)
-                    </span>
+                    <span>{tobyImportPreview.exactDuplicateCount} existing duplicate(s)</span>
+                    <span>{tobyImportPreview.inFileDuplicateCount} in-file duplicate(s)</span>
                   </div>
 
                   {tobyImportPreview.duplicateSamples.length > 0 ? (
@@ -7184,11 +7193,22 @@ export default function LibraryPageClient({
                         </p>
                       ))}
                     </div>
-                  ) : (
+                  ) : null}
+
+                  {tobyImportPreview.inFileDuplicateSamples.length > 0 ? (
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      {tobyImportPreview.inFileDuplicateSamples.map((sample) => (
+                        <p key={`file-dup-${sample.url}|${sample.label}`}>
+                          <strong className="text-foreground">{sample.label}</strong>
+                          {" appears more than once in this import file."}
+                        </p>
+                      ))}
+                    </div>
+                  ) : tobyImportPreview.duplicateSamples.length === 0 ? (
                     <p className="text-xs text-muted-foreground">
                       No exact duplicates found for this import.
                     </p>
-                  )}
+                  ) : null}
                 </div>
               ) : null}
             </div>

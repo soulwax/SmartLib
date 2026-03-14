@@ -10,7 +10,10 @@ import {
   assertRequestRateLimit,
   RATE_LIMIT_RULES,
 } from "@/lib/rate-limit"
-import { detectLinkDuplicates } from "@/lib/link-duplicate-detection"
+import {
+  buildExactDuplicateKey,
+  detectLinkDuplicates,
+} from "@/lib/link-duplicate-detection"
 import {
   ResourceOrganizationNotFoundError,
   ResourceWorkspaceAlreadyExistsError,
@@ -124,6 +127,33 @@ export async function POST(request: Request) {
       ReturnType<typeof createResourceWorkspaceService>
     >["workspace"] | null = null
     let targetWorkspaceId = input.workspaceId ?? null
+    const inFileDuplicateIndexes = new Set<number>()
+    const inFileDuplicateSamples: Array<{
+      url: string
+      label: string
+    }> = []
+    const seenImportKeys = new Set<string>()
+
+    parsedImport.resources.forEach((resource, index) => {
+      const link = resource.links[0]
+      if (!link) {
+        return
+      }
+
+      const key = buildExactDuplicateKey(link.url) ?? link.url.trim().toLowerCase()
+      if (seenImportKeys.has(key)) {
+        inFileDuplicateIndexes.add(index)
+        if (inFileDuplicateSamples.length < DUPLICATE_SAMPLE_LIMIT) {
+          inFileDuplicateSamples.push({
+            url: link.url,
+            label: link.label,
+          })
+        }
+        return
+      }
+
+      seenImportKeys.add(key)
+    })
 
     if (input.createWorkspace && !input.previewOnly) {
       const workspaceResult = await createResourceWorkspaceService(
@@ -146,6 +176,8 @@ export async function POST(request: Request) {
             importedLists: parsedImport.importedLists,
             importedCards: parsedImport.importedCards,
             exactDuplicateCount: 0,
+            inFileDuplicateCount: inFileDuplicateIndexes.size,
+            inFileDuplicateSamples,
             duplicateSamples: [],
           },
           { status: 200 },
@@ -220,6 +252,8 @@ export async function POST(request: Request) {
           importedLists: parsedImport.importedLists,
           importedCards: parsedImport.importedCards,
           exactDuplicateCount: exactDuplicateIndexes.size,
+          inFileDuplicateCount: inFileDuplicateIndexes.size,
+          inFileDuplicateSamples,
           duplicateSamples,
         },
         { status: 200 },
@@ -231,7 +265,10 @@ export async function POST(request: Request) {
     let skippedExactDuplicates = 0
 
     for (const [index, resource] of parsedImport.resources.entries()) {
-      if (input.skipExactDuplicates && exactDuplicateIndexes.has(index)) {
+      if (
+        input.skipExactDuplicates &&
+        (exactDuplicateIndexes.has(index) || inFileDuplicateIndexes.has(index))
+      ) {
         skippedExactDuplicates += 1
         continue
       }
@@ -279,6 +316,8 @@ export async function POST(request: Request) {
         importedLists: parsedImport.importedLists,
         importedCards: parsedImport.importedCards,
         exactDuplicateCount: exactDuplicateIndexes.size,
+        inFileDuplicateCount: inFileDuplicateIndexes.size,
+        inFileDuplicateSamples,
         skippedExactDuplicates,
         duplicateSamples,
         importedResources,

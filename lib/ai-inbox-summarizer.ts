@@ -1,17 +1,10 @@
 import "server-only"
 
-const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-const DEFAULT_PERPLEXITY_MODEL = "sonar"
+import { generateAiText } from "@/lib/ai-provider"
+
 const MAX_ITEMS = 25
 const MAX_ACTION_ITEMS = 4
 const MAX_FOCUS_CATEGORIES = 4
-
-export class MissingPerplexityApiKeyError extends Error {
-  constructor() {
-    super("AI features are unavailable because PERPLEXITY_API_KEY is not configured.")
-    this.name = "MissingPerplexityApiKeyError"
-  }
-}
 
 export interface AiInboxSummaryItem {
   url: string
@@ -35,15 +28,6 @@ export interface AiInboxBatchSummary {
 interface SummarizeAiInboxInput {
   items: AiInboxSummaryItem[]
   useAi?: boolean
-}
-
-function getPerplexityApiKey(): string {
-  const apiKey = process.env.PERPLEXITY_API_KEY?.trim()
-  if (!apiKey) {
-    throw new MissingPerplexityApiKeyError()
-  }
-
-  return apiKey
 }
 
 function normalizeWhitespace(value: string): string {
@@ -216,44 +200,6 @@ function buildItemDigest(items: AiInboxSummaryItem[]): string {
     .join("\n")
 }
 
-function extractAssistantText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return ""
-  }
-
-  const root = payload as {
-    choices?: Array<{ message?: { content?: unknown } }>
-  }
-  const content = root.choices?.[0]?.message?.content
-
-  if (typeof content === "string") {
-    return content
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part
-        }
-
-        if (
-          part &&
-          typeof part === "object" &&
-          "text" in part &&
-          typeof (part as { text?: unknown }).text === "string"
-        ) {
-          return (part as { text: string }).text
-        }
-
-        return ""
-      })
-      .join("\n")
-  }
-
-  return ""
-}
-
 function parseSummaryFromText(text: string): {
   summary: string | null
   actionItems: string[]
@@ -324,48 +270,22 @@ async function generateAiSummary(
   focusCategories: string[]
   model: string
 }> {
-  const apiKey = getPerplexityApiKey()
-  const model = DEFAULT_PERPLEXITY_MODEL
   const digest = buildItemDigest(items)
 
-  const response = await fetch(PERPLEXITY_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      max_tokens: 280,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You summarize batches of developer links. Return JSON only with shape: {\"summary\":\"...\",\"actions\":[\"...\"],\"focusCategories\":[\"...\"]}. Summary max 200 chars. actions: 2-4 short action items. focusCategories: up to 4 short categories.",
-        },
-        {
-          role: "user",
-          content: [
-            "Summarize this AI inbox batch and propose next actions.",
-            "",
-            "Items:",
-            digest,
-          ].join("\n"),
-        },
-      ],
-    }),
+  const aiResult = await generateAiText({
+    systemInstruction:
+      "You summarize batches of developer links. Return JSON only with shape: {\"summary\":\"...\",\"actions\":[\"...\"],\"focusCategories\":[\"...\"]}. Summary max 200 chars. actions: 2-4 short action items. focusCategories: up to 4 short categories.",
+    prompt: [
+      "Summarize this AI inbox batch and propose next actions.",
+      "",
+      "Items:",
+      digest,
+    ].join("\n"),
+    temperature: 0.2,
+    maxOutputTokens: 280,
+    responseMimeType: "application/json",
   })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(
-      `AI provider request failed (${response.status}). ${errorText || "No response body."}`
-    )
-  }
-
-  const payload = (await response.json()) as unknown
-  const parsed = parseSummaryFromText(extractAssistantText(payload))
+  const parsed = parseSummaryFromText(aiResult.text)
   if (!parsed.summary) {
     throw new Error("AI did not return a usable inbox summary.")
   }
@@ -377,7 +297,7 @@ async function generateAiSummary(
         ? parsed.actionItems
         : ["Review duplicates first, then import the highest-value links."],
     focusCategories: parsed.focusCategories,
-    model,
+    model: aiResult.model,
   }
 }
 

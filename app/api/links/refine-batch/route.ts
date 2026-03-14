@@ -3,22 +3,35 @@ import { createApiErrorResponse } from "@/lib/api-error"
 import { z } from "zod"
 
 import { auth } from "@/auth"
-import { MissingAiApiKeyError } from "@/lib/ai-provider"
 import { canCreateResources, deriveUserRole } from "@/lib/authorization"
+import { refineAiInboxItems } from "@/lib/ai-inbox-refiner"
 import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
   asRateLimitJsonResponse,
   assertRequestRateLimit,
   RATE_LIMIT_RULES,
 } from "@/lib/rate-limit"
-import { suggestLinkDetailsFromUrl } from "@/lib/link-paste-suggester"
-import { normalizeHttpUrl } from "@/lib/link-paste"
 
 export const runtime = "nodejs"
 
+const MAX_ITEMS = 25
+
 const requestSchema = z.object({
-  url: z.string().trim().min(1).max(2048),
+  useAi: z.boolean().optional(),
   categories: z.array(z.string().trim().min(1).max(80)).max(200).optional(),
+  items: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(120),
+        url: z.string().trim().min(1).max(2048),
+        label: z.string().trim().max(240),
+        note: z.string().trim().max(400).optional().nullable(),
+        category: z.string().trim().max(80).nullable().optional(),
+        tags: z.array(z.string().trim().max(40)).max(12).optional(),
+      })
+    )
+    .min(1)
+    .max(MAX_ITEMS),
 })
 
 function errorResponse(
@@ -58,10 +71,6 @@ export async function POST(request: Request) {
     validateCSRF(request)
 
     const session = await auth()
-    await assertRequestRateLimit(request, RATE_LIMIT_RULES.AI_REQUESTS, {
-      userId: session?.user?.id ?? null,
-      message: "AI request rate limit reached. Please wait and try again.",
-    })
     if (!session?.user?.id) {
       return errorResponse("Authentication required.", 401)
     }
@@ -72,45 +81,44 @@ export async function POST(request: Request) {
       isFirstAdmin: session.user.isFirstAdmin,
     })
     if (!canCreateResources(role)) {
-      return errorResponse("Insufficient permissions for AI paste suggestions.", 403)
+      return errorResponse("Insufficient permissions for AI inbox refinement.", 403)
     }
+
+    await assertRequestRateLimit(request, RATE_LIMIT_RULES.AI_REQUESTS, {
+      userId: session.user.id,
+      message: "AI inbox refinement request limit reached. Please try again shortly.",
+    })
 
     const payload = await readRequestJson(request)
     const input = requestSchema.parse(payload)
-    const normalizedUrl = normalizeHttpUrl(input.url)
-    if (!normalizedUrl) {
-      return errorResponse("A valid http(s) URL is required.", 400)
-    }
-
-    const suggestion = await suggestLinkDetailsFromUrl({
-      url: normalizedUrl,
+    const result = await refineAiInboxItems({
+      items: input.items,
       categories: input.categories,
+      useAi: input.useAi === true,
     })
 
     return NextResponse.json({
-      url: normalizedUrl,
-      label: suggestion.label,
-      note: suggestion.note,
-      category: suggestion.category,
-      tags: suggestion.tags,
-      model: suggestion.model,
+      items: result.items,
+      refined: result.items.length,
+      usedAi: result.usedAi,
+      model: result.model,
+      warning: result.warning,
     })
   } catch (error) {
+    if (error instanceof CSRFValidationError) {
+      return errorResponse("Invalid request origin.", 403)
+    }
+
     const rateLimited = asRateLimitJsonResponse(error)
     if (rateLimited) {
       return rateLimited
     }
 
-    if (error instanceof CSRFValidationError) {
-      return errorResponse("Invalid request origin.", 403)
-    }
-
     if (error instanceof z.ZodError) {
-      return errorResponse("Invalid paste payload.", 400, { code: "VALIDATION_ERROR", details: error.flatten() })
-    }
-
-    if (error instanceof MissingAiApiKeyError) {
-      return errorResponse(error.message, 503)
+      return errorResponse("Invalid AI inbox refinement payload.", 400, {
+        code: "VALIDATION_ERROR",
+        details: error.flatten(),
+      })
     }
 
     return errorResponse(

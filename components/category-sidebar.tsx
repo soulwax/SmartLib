@@ -39,6 +39,7 @@ import {
   Search,
   Pencil,
   Settings,
+  RefreshCw,
   Trash2,
   X,
 } from "lucide-react";
@@ -86,6 +87,7 @@ interface CategorySidebarProps {
     targetCategory: string;
   }) => void;
   onOpenWorkspaceSettings?: () => void;
+  onRefresh?: () => void;
   showHeading?: boolean;
   compactHeading?: boolean;
   headingLabel?: string;
@@ -128,6 +130,7 @@ export function CategorySidebar({
   canDropLinkItems = false,
   onDropLinkItemToCategory,
   onOpenWorkspaceSettings,
+  onRefresh,
   showHeading = true,
   compactHeading = false,
   headingLabel = "Categories",
@@ -183,9 +186,11 @@ export function CategorySidebar({
   );
 
   return (
-    <div className="flex h-full flex-col">
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-1 p-4">
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className="flex h-full flex-col">
+          <ScrollArea className="flex-1">
+            <div className="flex flex-col gap-1 p-4">
         {showHeading ? (
           <div
             className={cn(
@@ -415,29 +420,69 @@ export function CategorySidebar({
               </div>
             )}
         </div>
-      </ScrollArea>
+          </ScrollArea>
 
-      {onOpenWorkspaceSettings ? (
-        <div className="border-t border-border/70 p-3">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground"
-                onClick={onOpenWorkspaceSettings}
-              >
-                <Settings className="h-3.5 w-3.5" />
-                Collection settings
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              Rename or delete this collection
-            </TooltipContent>
-          </Tooltip>
+          {onOpenWorkspaceSettings ? (
+            <div className="border-t border-border/70 p-3">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={onOpenWorkspaceSettings}
+                  >
+                    <Settings className="h-3.5 w-3.5" />
+                    Collection settings
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  Rename or delete this collection
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-    </div>
+      </ContextMenuTrigger>
+
+      <ContextMenuContent className="w-56">
+        <ContextMenuLabel>Category panel</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => onCategoryChange("All")}>
+          View all categories
+        </ContextMenuItem>
+        {canManageCategories ? (
+          <ContextMenuItem onSelect={() => onCreateCategory?.()}>
+            <FolderPlus className="mr-2 h-4 w-4" />
+            Create category
+          </ContextMenuItem>
+        ) : null}
+        {canPasteIntoCategory && activeCategory !== "All" ? (
+          <ContextMenuItem onSelect={() => onPasteIntoCategory?.(activeCategory)}>
+            <ClipboardPaste className="mr-2 h-4 w-4" />
+            Paste into selected category
+          </ContextMenuItem>
+        ) : null}
+        {categoryFilter ? (
+          <ContextMenuItem onSelect={() => setCategoryFilter("")}>
+            <X className="mr-2 h-4 w-4" />
+            Clear category filter
+          </ContextMenuItem>
+        ) : null}
+        {onOpenWorkspaceSettings ? (
+          <ContextMenuItem onSelect={onOpenWorkspaceSettings}>
+            <Settings className="mr-2 h-4 w-4" />
+            Collection settings
+          </ContextMenuItem>
+        ) : null}
+        {onRefresh ? (
+          <ContextMenuItem onSelect={onRefresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh library
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

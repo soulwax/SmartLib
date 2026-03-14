@@ -1,7 +1,7 @@
 import "server-only"
 
-const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-const DEFAULT_PERPLEXITY_MODEL = "sonar"
+import { generateAiText } from "@/lib/ai-provider"
+
 const MAX_LINK_SAMPLES = 64
 const MAX_SUGGESTED_NAME_LENGTH = 80
 
@@ -14,22 +14,6 @@ interface LinkForCategorySuggestion {
 interface SuggestCategoryNameInput {
   currentName: string
   links: LinkForCategorySuggestion[]
-}
-
-export class MissingPerplexityApiKeyError extends Error {
-  constructor() {
-    super("AI features are unavailable because PERPLEXITY_API_KEY is not configured.")
-    this.name = "MissingPerplexityApiKeyError"
-  }
-}
-
-function getPerplexityApiKey(): string {
-  const apiKey = process.env.PERPLEXITY_API_KEY?.trim()
-  if (!apiKey) {
-    throw new MissingPerplexityApiKeyError()
-  }
-
-  return apiKey
 }
 
 function normalizeCategoryName(value: string): string {
@@ -67,43 +51,6 @@ function buildLinkDigest(links: LinkForCategorySuggestion[]): string {
     .join("\n")
 }
 
-function extractAssistantText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return ""
-  }
-
-  const root = payload as {
-    choices?: Array<{ message?: { content?: unknown } }>
-  }
-  const content = root.choices?.[0]?.message?.content
-  if (typeof content === "string") {
-    return content
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part
-        }
-
-        if (
-          part &&
-          typeof part === "object" &&
-          "text" in part &&
-          typeof (part as { text?: unknown }).text === "string"
-        ) {
-          return (part as { text: string }).text
-        }
-
-        return ""
-      })
-      .join("\n")
-  }
-
-  return ""
-}
-
 function parseSuggestedNameFromText(text: string): string | null {
   const trimmed = text.trim()
   if (!trimmed) {
@@ -137,51 +84,24 @@ export async function suggestShortCategoryNameFromLinks(
     throw new Error("No links available for category name analysis.")
   }
 
-  const apiKey = getPerplexityApiKey()
-  const model = DEFAULT_PERPLEXITY_MODEL
   const linkDigest = buildLinkDigest(links)
 
-  const response = await fetch(PERPLEXITY_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      max_tokens: 120,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a naming assistant for developer resource libraries. Return JSON only: {\"name\":\"...\"}. The name must be short (1-3 words), descriptive, and <= 28 characters.",
-        },
-        {
-          role: "user",
-          content: [
-            `Current category name: ${currentName || "General"}`,
-            "Analyze the links and propose a better short category name.",
-            "Use title case and avoid generic names like Misc or Links.",
-            "",
-            "Links:",
-            linkDigest,
-          ].join("\n"),
-        },
-      ],
-    }),
+  const aiResult = await generateAiText({
+    systemInstruction:
+      "You are a naming assistant for developer resource libraries. Return JSON only: {\"name\":\"...\"}. The name must be short (1-3 words), descriptive, and <= 28 characters.",
+    prompt: [
+      `Current category name: ${currentName || "General"}`,
+      "Analyze the links and propose a better short category name.",
+      "Use title case and avoid generic names like Misc or Links.",
+      "",
+      "Links:",
+      linkDigest,
+    ].join("\n"),
+    temperature: 0.2,
+    maxOutputTokens: 120,
+    responseMimeType: "application/json",
   })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(
-      `AI provider request failed (${response.status}). ${errorText || "No response body."}`
-    )
-  }
-
-  const payload = (await response.json()) as unknown
-  const assistantText = extractAssistantText(payload)
-  const parsedName = parseSuggestedNameFromText(assistantText)
+  const parsedName = parseSuggestedNameFromText(aiResult.text)
   const suggestedName = normalizeCategoryName(parsedName ?? "")
 
   if (!suggestedName) {
@@ -190,6 +110,6 @@ export async function suggestShortCategoryNameFromLinks(
 
   return {
     suggestedName,
-    model,
+    model: aiResult.model,
   }
 }

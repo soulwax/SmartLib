@@ -3,6 +3,7 @@ import { createApiErrorResponse } from "@/lib/api-error"
 import { z } from "zod"
 
 import { auth } from "@/auth"
+import { MissingAiApiKeyError } from "@/lib/ai-provider"
 import { canCreateResources, deriveUserRole } from "@/lib/authorization"
 import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
 import {
@@ -11,10 +12,7 @@ import {
   RATE_LIMIT_RULES,
 } from "@/lib/rate-limit"
 import { detectLinkDuplicates } from "@/lib/link-duplicate-detection"
-import {
-  MissingPerplexityApiKeyError,
-  suggestLinkDetailsFromUrl,
-} from "@/lib/link-paste-suggester"
+import { suggestLinkDetailsFromUrl } from "@/lib/link-paste-suggester"
 import {
   buildLinkDraftFromUrl,
   normalizeDraftCategory,
@@ -28,6 +26,7 @@ import { listResourcesService } from "@/lib/resource-service"
 export const runtime = "nodejs"
 
 const MAX_BATCH_URLS = 25
+const ANALYZE_CONCURRENCY = 4
 
 const requestSchema = z.object({
   urls: z.array(z.string().trim().min(1).max(2048)).min(1).max(MAX_BATCH_URLS),
@@ -90,6 +89,28 @@ async function readRequestJson(request: Request): Promise<unknown> {
   }
 }
 
+async function mapWithConcurrency<T, TResult>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<TResult>
+): Promise<TResult[]> {
+  const results = new Array<TResult>(items.length)
+  let nextIndex = 0
+
+  const workers = Array.from({
+    length: Math.max(1, Math.min(concurrency, items.length)),
+  }).map(async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex)
+    }
+  })
+
+  await Promise.all(workers)
+  return results
+}
+
 export async function POST(request: Request) {
   try {
     validateCSRF(request)
@@ -131,76 +152,66 @@ export async function POST(request: Request) {
       ? resources.filter((resource) => resource.workspaceId === input.workspaceId)
       : resources
 
-    const items: Array<{
-      url: string
-      label: string
-      note: string
-      category: string | null
-      tags: string[]
-      model: string | null
-      usedAi: boolean
-      error: string | null
-      exactMatches: ReturnType<typeof detectLinkDuplicates>["exactMatches"]
-      nearMatches: ReturnType<typeof detectLinkDuplicates>["nearMatches"]
-    }> = []
-
     const categoryHints = normalizeCategoryHints(input.categories)
     const shouldUseAi = input.useAi === true
+    const items = await mapWithConcurrency(
+      normalizedUrls,
+      ANALYZE_CONCURRENCY,
+      async (url) => {
+        const fallback = buildLinkDraftFromUrl(url)
+        let label = fallback.label
+        let note = fallback.note
+        let category = normalizeDraftCategory(fallback.category ?? "")
+        let tags = normalizeDraftTags(fallback.tags ?? [])
+        let model: string | null = null
+        let usedAi = false
+        let error: string | null = null
 
-    for (const url of normalizedUrls) {
-      const fallback = buildLinkDraftFromUrl(url)
-      let label = fallback.label
-      let note = fallback.note
-      let category = normalizeDraftCategory(fallback.category ?? "")
-      let tags = normalizeDraftTags(fallback.tags ?? [])
-      let model: string | null = null
-      let usedAi = false
-      let error: string | null = null
+        if (shouldUseAi) {
+          try {
+            const suggestion = await suggestLinkDetailsFromUrl({
+              url,
+              categories: categoryHints,
+            })
 
-      if (shouldUseAi) {
-        try {
-          const suggestion = await suggestLinkDetailsFromUrl({
-            url,
-            categories: categoryHints,
-          })
-
-          label = normalizeDraftLabel(suggestion.label)
-          note = normalizeDraftNote(suggestion.note)
-          category = normalizeDraftCategory(suggestion.category ?? "")
-          tags = normalizeDraftTags(suggestion.tags ?? [])
-          model = suggestion.model
-          usedAi = true
-        } catch (suggestionError) {
-          if (suggestionError instanceof MissingPerplexityApiKeyError) {
-            error = suggestionError.message
-          } else {
-            error =
-              suggestionError instanceof Error
-                ? suggestionError.message
-                : "AI suggestion failed."
+            label = normalizeDraftLabel(suggestion.label)
+            note = normalizeDraftNote(suggestion.note)
+            category = normalizeDraftCategory(suggestion.category ?? "")
+            tags = normalizeDraftTags(suggestion.tags ?? [])
+            model = suggestion.model
+            usedAi = true
+          } catch (suggestionError) {
+            if (suggestionError instanceof MissingAiApiKeyError) {
+              error = suggestionError.message
+            } else {
+              error =
+                suggestionError instanceof Error
+                  ? suggestionError.message
+                  : "AI suggestion failed."
+            }
           }
         }
+
+        const duplicateInsight = detectLinkDuplicates({
+          links: [{ url, label }],
+          resources: duplicateScopeResources,
+          workspaceId: input.workspaceId ?? null,
+        })
+
+        return {
+          url,
+          label,
+          note,
+          category,
+          tags,
+          model,
+          usedAi,
+          error,
+          exactMatches: duplicateInsight.exactMatches,
+          nearMatches: duplicateInsight.nearMatches,
+        }
       }
-
-      const duplicateInsight = detectLinkDuplicates({
-        links: [{ url, label }],
-        resources: duplicateScopeResources,
-        workspaceId: input.workspaceId ?? null,
-      })
-
-      items.push({
-        url,
-        label,
-        note,
-        category,
-        tags,
-        model,
-        usedAi,
-        error,
-        exactMatches: duplicateInsight.exactMatches,
-        nearMatches: duplicateInsight.nearMatches,
-      })
-    }
+    )
 
     return NextResponse.json({
       items,

@@ -184,6 +184,11 @@ export async function POST(request: Request) {
       if (input.previewOnly && input.createWorkspace) {
         return NextResponse.json(
           {
+            workspace: null,
+            createdWorkspace: null,
+            workspaceCreated: false,
+            workspaceId: null,
+            organizationId: input.organizationId ?? null,
             importedLists: parsedImport.importedLists,
             importedCards: parsedImport.importedCards,
             exactDuplicateCount: 0,
@@ -262,6 +267,12 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           mode,
+          workspace: targetWorkspace,
+          createdWorkspace: null,
+          workspaceCreated: false,
+          workspaceId: targetWorkspaceId,
+          organizationId:
+            targetWorkspace?.organizationId ?? input.organizationId ?? null,
           importedLists: parsedImport.importedLists,
           importedCards: parsedImport.importedCards,
           exactDuplicateCount: exactDuplicateIndexes.size,
@@ -326,8 +337,7 @@ export async function POST(request: Request) {
       })
     }
 
-    let importBatch = null
-    let rollbackAvailable = false
+    let importBatch: Awaited<ReturnType<typeof createTobyImportBatch>> = null
 
     if (createdResourceIds.length > 0 && targetWorkspace) {
       try {
@@ -347,10 +357,7 @@ export async function POST(request: Request) {
           failed,
           resourceIds: createdResourceIds,
         })
-        rollbackAvailable = importBatch !== null
       } catch (error) {
-        rollbackAvailable = false
-
         if (!isTobyImportBatchStorageUnavailableError(error)) {
           console.error("Failed to record Toby import batch:", error)
         }
@@ -360,10 +367,12 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         mode,
-        workspace: createdWorkspace,
+        workspace: targetWorkspace,
+        createdWorkspace,
+        workspaceCreated: createdWorkspace !== null,
         workspaceId: targetWorkspaceId,
         organizationId:
-          createdWorkspace?.organizationId ?? input.organizationId ?? null,
+          targetWorkspace?.organizationId ?? input.organizationId ?? null,
         importedLists: parsedImport.importedLists,
         importedCards: parsedImport.importedCards,
         exactDuplicateCount: exactDuplicateIndexes.size,
@@ -374,7 +383,7 @@ export async function POST(request: Request) {
         importedResources,
         failed,
         importBatch,
-        rollbackAvailable,
+        rollbackAvailable: importBatch !== null,
       },
       { status: importedResources > 0 ? 201 : 200 },
     )

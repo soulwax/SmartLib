@@ -1,9 +1,8 @@
 import "server-only"
 
+import { generateAiText } from "@/lib/ai-provider"
 import type { ResourceCard, ResourceLink } from "@/lib/resources"
 
-const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-const DEFAULT_PERPLEXITY_MODEL = "sonar"
 const MAX_QUESTION_LENGTH = 500
 const DEFAULT_MAX_CITATIONS = 5
 const MAX_CITATIONS = 8
@@ -11,12 +10,7 @@ const MAX_HISTORY_ITEMS = 8
 const QUERY_CONTEXT_USER_TURN_COUNT = 2
 const MAX_FOLLOW_UP_SUGGESTIONS = 4
 
-export class MissingPerplexityApiKeyError extends Error {
-  constructor() {
-    super("AI features are unavailable because PERPLEXITY_API_KEY is not configured.")
-    this.name = "MissingPerplexityApiKeyError"
-  }
-}
+export type AskLibraryMode = "concise" | "deep" | "actions"
 
 export interface AskLibraryConversationTurn {
   role: "user" | "assistant"
@@ -58,6 +52,7 @@ interface AskLibraryInput {
   resources: ResourceCard[]
   maxCitations?: number
   useAi?: boolean
+  mode?: AskLibraryMode
   history?: AskLibraryConversationTurn[]
 }
 
@@ -66,15 +61,6 @@ interface ScoredMatch {
   score: number
   bestLink: ResourceLink | null
   matchedTags: string[]
-}
-
-function getPerplexityApiKey(): string {
-  const apiKey = process.env.PERPLEXITY_API_KEY?.trim()
-  if (!apiKey) {
-    throw new MissingPerplexityApiKeyError()
-  }
-
-  return apiKey
 }
 
 function normalizeWhitespace(value: string): string {
@@ -332,52 +318,42 @@ function buildDeterministicAnswer(
   ].join(" ")
 }
 
-function extractAssistantText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return ""
+function buildAskLibrarySystemInstruction(mode: AskLibraryMode): string {
+  const sharedRules = [
+    "You are a retrieval assistant for a developer's saved library.",
+    "Answer only from provided citations.",
+    "Every factual sentence must include a citation marker like [1].",
+    "Never invent facts, links, or sources.",
+  ]
+
+  if (mode === "deep") {
+    return [
+      ...sharedRules,
+      "Prefer a fuller explanation with patterns, tradeoffs, and concrete takeaways.",
+      "Keep the answer well-structured but compact enough to scan quickly.",
+    ].join(" ")
   }
 
-  const root = payload as {
-    choices?: Array<{ message?: { content?: unknown } }>
-  }
-  const content = root.choices?.[0]?.message?.content
-
-  if (typeof content === "string") {
-    return content
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part
-        }
-
-        if (
-          part &&
-          typeof part === "object" &&
-          "text" in part &&
-          typeof (part as { text?: unknown }).text === "string"
-        ) {
-          return (part as { text: string }).text
-        }
-
-        return ""
-      })
-      .join("\n")
+  if (mode === "actions") {
+    return [
+      ...sharedRules,
+      "Respond as a practical action plan.",
+      "Use short bullets or short paragraphs that recommend what to read or do next.",
+    ].join(" ")
   }
 
-  return ""
+  return [
+    ...sharedRules,
+    "Respond concisely in one or two tight paragraphs.",
+  ].join(" ")
 }
 
 async function generateAiAnswer(
   question: string,
   citations: AskLibraryCitation[],
-  history: AskLibraryConversationTurn[]
+  history: AskLibraryConversationTurn[],
+  mode: AskLibraryMode
 ): Promise<{ answer: string; model: string }> {
-  const apiKey = getPerplexityApiKey()
-  const model = DEFAULT_PERPLEXITY_MODEL
-
   const citationDigest = citations
     .map((citation) => {
       const details = [
@@ -405,54 +381,29 @@ async function generateAiAnswer(
           .join("\n")
       : ""
 
-  const response = await fetch(PERPLEXITY_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      max_tokens: 350,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a retrieval assistant for a developer's saved library. Answer only from provided citations. Every factual sentence must include a citation marker like [1]. Never invent facts or links.",
-        },
-        {
-          role: "user",
-          content: [
-            `Question: ${question}`,
-            ...(conversationDigest
-              ? ["", "Recent conversation:", conversationDigest]
-              : []),
-            "",
-            "Citations:",
-            citationDigest,
-          ].join("\n"),
-        },
-      ],
-    }),
+  const aiResult = await generateAiText({
+    systemInstruction: buildAskLibrarySystemInstruction(mode),
+    prompt: [
+      `Question: ${question}`,
+      `Answer mode: ${mode}`,
+      ...(conversationDigest
+        ? ["", "Recent conversation:", conversationDigest]
+        : []),
+      "",
+      "Citations:",
+      citationDigest,
+    ].join("\n"),
+    temperature: 0.2,
+    maxOutputTokens: 350,
   })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(
-      `AI provider request failed (${response.status}). ${errorText || "No response body."}`
-    )
-  }
-
-  const payload = (await response.json()) as unknown
-  const assistantText = normalizeWhitespace(extractAssistantText(payload))
+  const assistantText = normalizeWhitespace(aiResult.text)
   if (!assistantText) {
     throw new Error("AI answer was empty.")
   }
 
   return {
     answer: assistantText,
-    model,
+    model: aiResult.model,
   }
 }
 
@@ -461,6 +412,7 @@ export async function askLibraryQuestion(
 ): Promise<AskLibraryResult> {
   const question = normalizeQuestion(input.question)
   const history = normalizeConversationHistory(input.history)
+  const mode = input.mode ?? "concise"
   const maxCitations = Math.min(
     MAX_CITATIONS,
     Math.max(1, input.maxCitations ?? DEFAULT_MAX_CITATIONS)
@@ -498,7 +450,7 @@ export async function askLibraryQuestion(
 
   if (input.useAi) {
     try {
-      const aiResult = await generateAiAnswer(question, citations, history)
+      const aiResult = await generateAiAnswer(question, citations, history, mode)
       return {
         question,
         answer: aiResult.answer,

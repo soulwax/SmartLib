@@ -3,10 +3,8 @@ import { createApiErrorResponse } from "@/lib/api-error"
 import { z } from "zod"
 
 import { auth } from "@/auth"
-import { appendAskLibraryThreadInteraction } from "@/lib/ask-library-thread-repository"
 import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
-import { hasDatabaseEnv } from "@/lib/env"
-import { askLibraryQuestion } from "@/lib/library-ask"
+import { generateLibraryBrief } from "@/lib/library-brief"
 import {
   asRateLimitJsonResponse,
   assertRequestRateLimit,
@@ -16,14 +14,7 @@ import { listResourcesService } from "@/lib/resource-service"
 
 export const runtime = "nodejs"
 
-const historyTurnSchema = z.object({
-  role: z.enum(["user", "assistant"]),
-  content: z.string().trim().min(1).max(500),
-})
-
 const requestSchema = z.object({
-  question: z.string().trim().min(2).max(500),
-  threadId: z.string().uuid().nullable().optional(),
   workspaceId: z.string().uuid().nullable().optional(),
   category: z.string().trim().min(1).max(80).nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
@@ -31,9 +22,6 @@ const requestSchema = z.object({
   scopeCategory: z.boolean().optional(),
   scopeTags: z.boolean().optional(),
   useAi: z.boolean().optional(),
-  mode: z.enum(["concise", "deep", "actions"]).optional(),
-  maxCitations: z.number().int().min(1).max(8).optional(),
-  history: z.array(historyTurnSchema).max(8).optional(),
 })
 
 function errorResponse(
@@ -75,7 +63,7 @@ export async function POST(request: Request) {
     const session = await auth()
     await assertRequestRateLimit(request, RATE_LIMIT_RULES.AI_REQUESTS, {
       userId: session?.user?.id ?? null,
-      message: "Ask Library request limit reached. Please try again shortly.",
+      message: "Library brief request limit reached. Please try again shortly.",
     })
 
     const payload = await readRequestJson(request)
@@ -86,6 +74,7 @@ export async function POST(request: Request) {
       userId: session?.user?.id ?? null,
       includeAllWorkspaces,
     })
+
     const scopeWorkspace = input.scopeWorkspace !== false
     const scopeCategory = input.scopeCategory !== false
     const scopeTags = input.scopeTags === true
@@ -125,47 +114,12 @@ export async function POST(request: Request) {
       return true
     })
 
-    const result = await askLibraryQuestion({
-      question: input.question,
+    const result = await generateLibraryBrief({
       resources: scopedResources,
-      maxCitations: input.maxCitations,
       useAi: Boolean(input.useAi && session?.user?.id),
-      mode: input.mode,
-      history: input.history,
     })
 
-    let threadId = input.threadId ?? null
-    let threadTitle: string | null = null
-
-    if (session?.user?.id && hasDatabaseEnv()) {
-      try {
-        const persisted = await appendAskLibraryThreadInteraction({
-          userId: session.user.id,
-          threadId: input.threadId,
-          workspaceId: input.workspaceId ?? null,
-          question: result.question,
-          answer: result.answer,
-          usedAi: result.usedAi,
-          model: result.model,
-          citations: result.citations,
-          reasoning: result.reasoning,
-          followUpSuggestions: result.followUpSuggestions,
-        })
-        threadId = persisted.id
-        threadTitle = persisted.title
-      } catch (persistError) {
-        console.error(
-          "Ask Library thread persistence failed:",
-          persistError instanceof Error ? persistError.message : persistError
-        )
-      }
-    }
-
-    return NextResponse.json({
-      ...result,
-      threadId,
-      threadTitle,
-    })
+    return NextResponse.json(result)
   } catch (error) {
     if (error instanceof CSRFValidationError) {
       return errorResponse("Invalid request origin.", 403)
@@ -177,7 +131,10 @@ export async function POST(request: Request) {
     }
 
     if (error instanceof z.ZodError) {
-      return errorResponse("Invalid ask-library payload.", 400, { code: "VALIDATION_ERROR", details: error.flatten() })
+      return errorResponse("Invalid library brief payload.", 400, {
+        code: "VALIDATION_ERROR",
+        details: error.flatten(),
+      })
     }
 
     return errorResponse(

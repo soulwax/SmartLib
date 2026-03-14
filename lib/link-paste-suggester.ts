@@ -1,5 +1,6 @@
 import "server-only"
 
+import { generateAiText } from "@/lib/ai-provider"
 import {
   buildLinkDraftFromUrl,
   normalizeDraftCategory,
@@ -8,8 +9,6 @@ import {
   normalizeDraftTags,
 } from "@/lib/link-paste"
 
-const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-const DEFAULT_PERPLEXITY_MODEL = "sonar"
 const PAGE_FETCH_TIMEOUT_MS = 8000
 const MAX_PAGE_SIZE_BYTES = 2 * 1024 * 1024 // 2MB
 
@@ -33,13 +32,6 @@ const TECH_PATTERNS = {
   astro: /astro-island|data-astro/i,
 }
 
-export class MissingPerplexityApiKeyError extends Error {
-  constructor() {
-    super("AI features are unavailable because PERPLEXITY_API_KEY is not configured.")
-    this.name = "MissingPerplexityApiKeyError"
-  }
-}
-
 interface PageMetadata {
   title: string | null
   description: string | null
@@ -53,15 +45,6 @@ interface PageMetadata {
 interface SuggestLinkDetailsInput {
   url: string
   categories?: string[]
-}
-
-function getPerplexityApiKey(): string {
-  const apiKey = process.env.PERPLEXITY_API_KEY?.trim()
-  if (!apiKey) {
-    throw new MissingPerplexityApiKeyError()
-  }
-
-  return apiKey
 }
 
 /**
@@ -184,44 +167,6 @@ function filterTags(tags: string[]): string[] {
   })
 }
 
-function extractAssistantText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return ""
-  }
-
-  const root = payload as {
-    choices?: Array<{ message?: { content?: unknown } }>
-  }
-  const content = root.choices?.[0]?.message?.content
-
-  if (typeof content === "string") {
-    return content
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part
-        }
-
-        if (
-          part &&
-          typeof part === "object" &&
-          "text" in part &&
-          typeof (part as { text?: unknown }).text === "string"
-        ) {
-          return (part as { text: string }).text
-        }
-
-        return ""
-      })
-      .join("\n")
-  }
-
-  return ""
-}
-
 function parseSuggestionFromText(text: string): {
   label: string | null
   note: string | null
@@ -304,9 +249,7 @@ export async function suggestLinkDetailsFromUrl(
   tags: string[]
   model: string
 }> {
-  const apiKey = getPerplexityApiKey()
   const fallback = buildLinkDraftFromUrl(input.url)
-  const model = DEFAULT_PERPLEXITY_MODEL
   const categoryHints = normalizeDraftTags(
     (input.categories ?? []).map((category) => category.trim())
   )
@@ -335,63 +278,26 @@ export async function suggestLinkDetailsFromUrl(
     .filter(Boolean)
     .join("\n")
 
-  const response = await fetch(PERPLEXITY_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.1, // Lower temperature for more factual responses
-      max_tokens: 200,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You are a metadata assistant. CRITICAL RULES:",
-            "1. ONLY use information from the actual page content provided",
-            "2. DO NOT invent or hallucinate technologies, features, or descriptions",
-            "3. If page metadata is missing, use URL-based fallback",
-            "4. Return ONLY valid JSON: {\"label\":\"...\",\"note\":\"...\",\"category\":\"...\",\"tags\":[...]}",
-            "5. Label: concise page title (max 120 chars)",
-            "6. Note: factual one-sentence description from page content (max 280 chars)",
-            "7. Category: broad category like 'Documentation', 'Tool', 'Tutorial' (1-3 words)",
-            "8. Tags: 1-4 factual tags based on detected technologies or page purpose",
-            "9. Avoid marketing language, superlatives, and promotional terms",
-            "10. If detected technologies are listed, include relevant ones as tags",
-          ].join("\n"),
-        },
-        {
-          role: "user",
-          content: factualContext,
-        },
-      ],
-    }),
+  const aiResult = await generateAiText({
+    systemInstruction: [
+      "You are a metadata assistant. CRITICAL RULES:",
+      "1. ONLY use information from the actual page content provided",
+      "2. DO NOT invent or hallucinate technologies, features, or descriptions",
+      "3. If page metadata is missing, use URL-based fallback",
+      "4. Return ONLY valid JSON: {\"label\":\"...\",\"note\":\"...\",\"category\":\"...\",\"tags\":[...]}",
+      "5. Label: concise page title (max 120 chars)",
+      "6. Note: factual one-sentence description from page content (max 280 chars)",
+      "7. Category: broad category like 'Documentation', 'Tool', 'Tutorial' (1-3 words)",
+      "8. Tags: 1-4 factual tags based on detected technologies or page purpose",
+      "9. Avoid marketing language, superlatives, and promotional terms",
+      "10. If detected technologies are listed, include relevant ones as tags",
+    ].join("\n"),
+    prompt: factualContext,
+    temperature: 0.1,
+    maxOutputTokens: 200,
+    responseMimeType: "application/json",
   })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error("[link-paste-suggester] Perplexity API error:", {
-      status: response.status,
-      statusText: response.statusText,
-      body: errorText.substring(0, 500),
-    })
-
-    if (response.status === 401) {
-      throw new Error(
-        "AI suggestions unavailable: API authentication failed. Please check your Perplexity API key."
-      )
-    }
-
-    throw new Error(
-      `AI suggestions unavailable (${response.status}): ${response.statusText || "Unknown error"}`
-    )
-  }
-
-  const payload = (await response.json()) as unknown
-  const assistantText = extractAssistantText(payload)
-  const parsed = parseSuggestionFromText(assistantText)
+  const parsed = parseSuggestionFromText(aiResult.text)
 
   // Filter out spam/scam tags
   const filteredTags = filterTags(parsed.tags)
@@ -429,6 +335,6 @@ export async function suggestLinkDetailsFromUrl(
     note: finalNote,
     category: parsed.category,
     tags: finalTags,
-    model,
+    model: aiResult.model,
   }
 }

@@ -1,12 +1,20 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import pkg from "@/package.json";
 
 import type { ResourceOrganization } from "@/lib/resources";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -14,7 +22,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { FileText, Github, Plus, Settings } from "lucide-react";
+import {
+  FileText,
+  FolderPlus,
+  Github,
+  Plus,
+  RefreshCw,
+  Settings,
+} from "lucide-react";
 
 type OrganizationRailOrientation = "vertical" | "horizontal";
 
@@ -52,8 +67,11 @@ interface OrganizationRailProps {
   activeOrganizationId: string | null;
   onOrganizationChange: (organizationId: string) => void;
   onCreateOrganization?: () => void;
+  onCreateWorkspaceForOrganization?: (organizationId: string) => void;
   onOpenSettings?: () => void;
   canCreateOrganization?: boolean;
+  canCreateWorkspaceInOrganization?: boolean;
+  onRefresh?: () => void;
   showSettingsButton?: boolean;
   orientation?: OrganizationRailOrientation;
   isLoading?: boolean;
@@ -91,8 +109,11 @@ export function OrganizationRail({
   activeOrganizationId,
   onOrganizationChange,
   onCreateOrganization,
+  onCreateWorkspaceForOrganization,
   onOpenSettings,
   canCreateOrganization = false,
+  canCreateWorkspaceInOrganization = false,
+  onRefresh,
   showSettingsButton = false,
   orientation = "vertical",
   isLoading = false,
@@ -112,16 +133,63 @@ export function OrganizationRail({
   );
   const showLoadingState = isLoading && sortedOrganizations.length === 0;
   const skeletonCount = isVertical ? 4 : 5;
+  const activeOrganization =
+    sortedOrganizations.find((organization) => organization.id === activeOrganizationId) ??
+    null;
+
+  const wrapOrganizationItemMenu = (
+    organization: ResourceOrganization,
+    content: ReactNode,
+  ) => (
+    <ContextMenu key={organization.id}>
+      <ContextMenuTrigger asChild>{content}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56">
+        <ContextMenuLabel>{organization.name}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => onOrganizationChange(organization.id)}>
+          Open organization
+        </ContextMenuItem>
+        {canCreateWorkspaceInOrganization && onCreateWorkspaceForOrganization ? (
+          <ContextMenuItem
+            onSelect={() => onCreateWorkspaceForOrganization(organization.id)}
+          >
+            <FolderPlus className="mr-2 h-4 w-4" />
+            New collection here
+          </ContextMenuItem>
+        ) : null}
+        {canCreateOrganization && onCreateOrganization ? (
+          <ContextMenuItem onSelect={onCreateOrganization}>
+            <Plus className="mr-2 h-4 w-4" />
+            New organization
+          </ContextMenuItem>
+        ) : null}
+        {onOpenSettings ? (
+          <ContextMenuItem onSelect={onOpenSettings}>
+            <Settings className="mr-2 h-4 w-4" />
+            General settings
+          </ContextMenuItem>
+        ) : null}
+        {onRefresh ? (
+          <ContextMenuItem onSelect={onRefresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh library
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 
   return (
-    <div className={cn("flex h-full flex-col", !isVertical ? "w-full" : undefined)}>
-      <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
-        <div
-          className={cn(
-            compactMode ? "flex gap-1 p-1.5" : "flex gap-2 p-2",
-            isVertical ? "h-full flex-col items-center" : "items-center",
-          )}
-        >
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className={cn("flex h-full flex-col", !isVertical ? "w-full" : undefined)}>
+          <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
+            <div
+              className={cn(
+                compactMode ? "flex gap-1 p-1.5" : "flex gap-2 p-2",
+                isVertical ? "h-full flex-col items-center" : "items-center",
+              )}
+            >
           {showLoadingState
             ? Array.from({ length: skeletonCount }, (_, index) => (
                 <Skeleton
@@ -138,8 +206,9 @@ export function OrganizationRail({
                 const badge = organizationBadge(organization.name);
                 const tone = organizationTone(organization.name);
 
-                return (
-                  <Tooltip key={organization.id}>
+                return wrapOrganizationItemMenu(
+                  organization,
+                  <Tooltip>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
@@ -198,7 +267,7 @@ export function OrganizationRail({
                     <TooltipContent side={isVertical ? "right" : "bottom"}>
                       {organization.name}
                     </TooltipContent>
-                  </Tooltip>
+                  </Tooltip>,
                 );
               })}
 
@@ -227,16 +296,16 @@ export function OrganizationRail({
               </TooltipContent>
             </Tooltip>
           ) : null}
-        </div>
-      </ScrollArea>
+            </div>
+          </ScrollArea>
 
-      {showSettingsButton && isVertical ? (
-        <div
-          className={cn(
-            "mt-auto flex flex-col items-center border-t border-border/70",
-            compactMode ? "pb-1 pt-1" : "pb-2 pt-2",
-          )}
-        >
+          {showSettingsButton && isVertical ? (
+            <div
+              className={cn(
+                "mt-auto flex flex-col items-center border-t border-border/70",
+                compactMode ? "pb-1 pt-1" : "pb-2 pt-2",
+              )}
+            >
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -320,8 +389,43 @@ export function OrganizationRail({
           >
             v{pkg.version}
           </span>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-    </div>
+      </ContextMenuTrigger>
+
+      <ContextMenuContent className="w-56">
+        <ContextMenuLabel>Organizations</ContextMenuLabel>
+        <ContextMenuSeparator />
+        {canCreateOrganization && onCreateOrganization ? (
+          <ContextMenuItem onSelect={onCreateOrganization}>
+            <Plus className="mr-2 h-4 w-4" />
+            New organization
+          </ContextMenuItem>
+        ) : null}
+        {activeOrganization &&
+        canCreateWorkspaceInOrganization &&
+        onCreateWorkspaceForOrganization ? (
+          <ContextMenuItem
+            onSelect={() => onCreateWorkspaceForOrganization(activeOrganization.id)}
+          >
+            <FolderPlus className="mr-2 h-4 w-4" />
+            New collection in current organization
+          </ContextMenuItem>
+        ) : null}
+        {onOpenSettings ? (
+          <ContextMenuItem onSelect={onOpenSettings}>
+            <Settings className="mr-2 h-4 w-4" />
+            General settings
+          </ContextMenuItem>
+        ) : null}
+        {onRefresh ? (
+          <ContextMenuItem onSelect={onRefresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh library
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

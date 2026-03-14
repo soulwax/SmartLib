@@ -3,11 +3,9 @@ import { createApiErrorResponse } from "@/lib/api-error"
 import { z } from "zod"
 
 import { auth } from "@/auth"
+import { MissingAiApiKeyError } from "@/lib/ai-provider"
 import { CSRFValidationError, validateCSRF } from "@/lib/csrf-protection"
-import {
-  MissingPerplexityApiKeyError,
-  suggestShortCategoryNameFromLinks,
-} from "@/lib/category-name-suggester"
+import { suggestShortCategoryNameFromLinks } from "@/lib/category-name-suggester"
 import {
   asRateLimitJsonResponse,
   assertRequestRateLimit,
@@ -128,7 +126,7 @@ export async function POST(request: Request, context: RouteContext) {
       return errorResponse("Invalid category identifier.", 400, { code: "VALIDATION_ERROR", details: error.flatten() })
     }
 
-    if (error instanceof MissingPerplexityApiKeyError) {
+    if (error instanceof MissingAiApiKeyError) {
       return errorResponse(error.message, 503)
     }
 

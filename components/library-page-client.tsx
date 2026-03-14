@@ -1,5 +1,7 @@
 "use client";
 
+import { signIn, signOut, useSession } from "next-auth/react";
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -8,55 +10,22 @@ import {
   useState,
   type ChangeEvent,
 } from "react";
-import Link from "next/link";
-import { signIn, signOut, useSession } from "next-auth/react";
 
-import {
-  canCreateResources,
-  canManageResource as canManageResourceByRole,
-  deriveUserRole,
-  hasAdminAccess,
-} from "@/lib/authorization";
-import {
-  buildLinkDraftFromUrl,
-  extractHttpUrlsFromText,
-  normalizeDraftCategory,
-  normalizeDraftLabel,
-  normalizeDraftNote,
-  normalizeDraftTags,
-  normalizeHttpUrl,
-  type PastedLinkDraft,
-} from "@/lib/link-paste";
-import {
-  detectLinkDuplicates,
-  type LinkDuplicateMatch,
-} from "@/lib/link-duplicate-detection";
-import {
-  ACTIVE_ORGANIZATION_COOKIE,
-  ACTIVE_ORGANIZATION_STORAGE_KEY,
-  ACTIVE_WORKSPACE_COOKIE,
-  ACTIVE_WORKSPACE_STORAGE_KEY,
-  LIBRARY_LOCATION_STORAGE_KEY,
-  normalizePersistedId,
-} from "@/lib/library-location";
-import { cn } from "@/lib/utils";
-import type {
-  ResourceCard,
-  ResourceCategory,
-  ResourceInput,
-  ResourceOrganization,
-  ResourceWorkspace,
-} from "@/lib/resources";
 import { AddResourceModal } from "@/components/add-resource-modal";
+import { CategorySidebar } from "@/components/category-sidebar";
+import { useColorScheme } from "@/components/color-scheme-provider";
+import { CompactModeToggle } from "@/components/compact-mode";
 import { OrganizationRail } from "@/components/organization-rail";
+import { PaletteDropdown } from "@/components/palette-dropdown";
 import {
   ResourceBoard,
   type ResourceBoardMoveInput,
 } from "@/components/resource-board";
-import { CategorySidebar } from "@/components/category-sidebar";
-import { CompactModeToggle } from "@/components/compact-mode";
-import { useColorScheme } from "@/components/color-scheme-provider";
-import { WorkspaceRail } from "@/components/workspace-rail";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -75,7 +44,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Popover,
   PopoverContent,
@@ -89,21 +57,60 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PaletteDropdown } from "@/components/palette-dropdown";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { WorkspaceRail } from "@/components/workspace-rail";
 import {
+  canCreateResources,
+  canManageResource as canManageResourceByRole,
+  deriveUserRole,
+  hasAdminAccess,
+} from "@/lib/authorization";
+import {
+  ACTIVE_ORGANIZATION_COOKIE,
+  ACTIVE_ORGANIZATION_STORAGE_KEY,
+  ACTIVE_WORKSPACE_COOKIE,
+  ACTIVE_WORKSPACE_STORAGE_KEY,
+  LIBRARY_LOCATION_STORAGE_KEY,
+  normalizePersistedId,
+} from "@/lib/library-location";
+import {
+  detectLinkDuplicates,
+  type LinkDuplicateMatch,
+} from "@/lib/link-duplicate-detection";
+import {
+  buildLinkDraftFromUrl,
+  extractHttpUrlsFromText,
+  normalizeDraftCategory,
+  normalizeDraftLabel,
+  normalizeDraftNote,
+  normalizeDraftTags,
+  normalizeHttpUrl,
+  type PastedLinkDraft,
+} from "@/lib/link-paste";
+import type {
+  ResourceCard,
+  ResourceCategory,
+  ResourceInput,
+  ResourceOrganization,
+  ResourceWorkspace,
+} from "@/lib/resources";
+import { cn } from "@/lib/utils";
+import {
+  BadgeCheck,
   ChevronDown,
+  CircleAlert,
   ClipboardPaste,
   FilterX,
   FolderOpen,
   FolderPlus,
   Github,
   Loader2,
-  MessageSquareText,
   LogIn,
   LogOut,
   Menu,
+  MessageSquareText,
   Palette,
   Plus,
   RefreshCw,
@@ -269,6 +276,20 @@ interface AiInboxSummaryResponse extends ApiErrorResponse {
   analyzed?: number;
 }
 
+interface AiInboxRefineResponse extends ApiErrorResponse {
+  items?: Array<{
+    id: string;
+    label: string;
+    note: string;
+    category: string | null;
+    tags: string[];
+  }>;
+  refined?: number;
+  usedAi?: boolean;
+  model?: string | null;
+  warning?: string | null;
+}
+
 interface AiInboxSummaryState {
   summary: string;
   actionItems: string[];
@@ -278,6 +299,8 @@ interface AiInboxSummaryState {
   generatedAt: string;
   analyzed: number;
 }
+
+type AskLibraryMode = "concise" | "deep" | "actions";
 
 interface AskLibraryCitation {
   index: number;
@@ -352,6 +375,27 @@ interface AskLibraryThreadResponse extends ApiErrorResponse {
   thread?: AskLibraryThreadDetail;
 }
 
+interface AskLibraryBriefResponse extends ApiErrorResponse {
+  summary?: string;
+  focusAreas?: string[];
+  gaps?: string[];
+  suggestedQuestions?: string[];
+  resourceCount?: number;
+  usedAi?: boolean;
+  model?: string | null;
+  warning?: string | null;
+}
+
+interface AskLibraryBriefState {
+  summary: string;
+  focusAreas: string[];
+  gaps: string[];
+  suggestedQuestions: string[];
+  resourceCount: number;
+  usedAi: boolean;
+  model: string | null;
+}
+
 interface WorkspaceResponse extends ApiErrorResponse {
   mode?: "database" | "mock";
   workspace?: ResourceWorkspace;
@@ -371,6 +415,8 @@ interface ResourceResponse extends ApiErrorResponse {
 
 interface TobyImportResponse extends ApiErrorResponse {
   workspace?: ResourceWorkspace;
+  createdWorkspace?: ResourceWorkspace | null;
+  workspaceCreated?: boolean;
   workspaceId?: string | null;
   organizationId?: string | null;
   importBatch?: TobyImportBatchSummary | null;
@@ -424,6 +470,25 @@ interface TobyImportPreviewState {
   inFileDuplicateCount: number;
   inFileDuplicateSamples: NonNullable<TobyImportResponse["inFileDuplicateSamples"]>;
   duplicateSamples: NonNullable<TobyImportResponse["duplicateSamples"]>;
+}
+
+type TobyImportPhase =
+  | "idle"
+  | "importing"
+  | "refreshing"
+  | "success"
+  | "success-needs-refresh"
+  | "error";
+
+interface TobyImportResultState {
+  workspaceName: string | null;
+  importedLists: number;
+  importedCards: number;
+  importedResources: number;
+  skippedExactDuplicates: number;
+  failed: number;
+  rollbackAvailable: boolean;
+  needsManualRefresh: boolean;
 }
 
 interface TobyImportBatchesResponse extends ApiErrorResponse {
@@ -1024,6 +1089,10 @@ export default function LibraryPageClient({
   const [isTobyImportPreviewing, setIsTobyImportPreviewing] = useState(false);
   const [tobyImportPreview, setTobyImportPreview] =
     useState<TobyImportPreviewState | null>(null);
+  const [tobyImportPhase, setTobyImportPhase] =
+    useState<TobyImportPhase>("idle");
+  const [tobyImportResult, setTobyImportResult] =
+    useState<TobyImportResultState | null>(null);
   const [tobyImportBatches, setTobyImportBatches] = useState<
     TobyImportBatchSummary[]
   >([]);
@@ -1037,6 +1106,7 @@ export default function LibraryPageClient({
   const [aiInboxItems, setAiInboxItems] = useState<AiInboxItem[]>([]);
   const [aiInboxUseAi, setAiInboxUseAi] = useState(true);
   const [isAiInboxAnalyzing, setIsAiInboxAnalyzing] = useState(false);
+  const [isAiInboxPolishing, setIsAiInboxPolishing] = useState(false);
   const [isAiInboxImporting, setIsAiInboxImporting] = useState(false);
   const [isTobyImporting, setIsTobyImporting] = useState(false);
   const [tobyRollbackBatchId, setTobyRollbackBatchId] = useState<string | null>(
@@ -1070,6 +1140,10 @@ export default function LibraryPageClient({
   >([]);
   const [askLibraryUsedAi, setAskLibraryUsedAi] = useState(false);
   const [askLibraryModel, setAskLibraryModel] = useState<string | null>(null);
+  const [askLibraryMode, setAskLibraryMode] =
+    useState<AskLibraryMode>("concise");
+  const [askLibraryBrief, setAskLibraryBrief] =
+    useState<AskLibraryBriefState | null>(null);
   const [askScopeWorkspace, setAskScopeWorkspace] = useState(true);
   const [askScopeCategory, setAskScopeCategory] = useState(true);
   const [askScopeTags, setAskScopeTags] = useState(false);
@@ -1080,6 +1154,7 @@ export default function LibraryPageClient({
     useState(false);
   const [askLibraryThreadsError, setAskLibraryThreadsError] =
     useState<string | null>(null);
+  const [isAskLibraryBriefing, setIsAskLibraryBriefing] = useState(false);
   const [isAskingLibrary, setIsAskingLibrary] = useState(false);
   const [initialLinkDraft, setInitialLinkDraft] =
     useState<PastedLinkDraft | null>(null);
@@ -1281,6 +1356,7 @@ export default function LibraryPageClient({
   const isPasteFlowInProgress = pasteFlowActivityCount > 0;
   const isAiInboxBusy =
     isAiInboxAnalyzing ||
+    isAiInboxPolishing ||
     isAiInboxImporting ||
     isAiInboxMerging ||
     isAiInboxRenamingCategories ||
@@ -1298,6 +1374,9 @@ export default function LibraryPageClient({
     if (isAiInboxAnalyzing) {
       return "Analyzing AI inbox links...";
     }
+    if (isAiInboxPolishing) {
+      return "Polishing AI inbox metadata...";
+    }
     if (isAiInboxImporting) {
       return "Importing AI inbox links...";
     }
@@ -1312,6 +1391,9 @@ export default function LibraryPageClient({
     }
     if (isAskingLibrary) {
       return "Analyzing your library...";
+    }
+    if (isAskLibraryBriefing) {
+      return "Creating a scope brief...";
     }
     if (isAskLibraryThreadLoading) {
       return "Loading Ask Library thread...";
@@ -1368,9 +1450,11 @@ export default function LibraryPageClient({
   }, [
     authMode,
     deletingResourceId,
+    isAskLibraryBriefing,
     isAskLibraryThreadLoading,
     isAskLibraryThreadsLoading,
     isAiInboxAnalyzing,
+    isAiInboxPolishing,
     isAiInboxImporting,
     isAiInboxMerging,
     isAiInboxRenamingCategories,
@@ -2170,6 +2254,7 @@ export default function LibraryPageClient({
     try {
       const response = await fetch("/api/workspaces/counts", {
         cache: "no-store",
+        credentials: "same-origin",
       });
       const payload = await readJson<WorkspaceCountsResponse>(response);
       if (!response.ok) {
@@ -2197,13 +2282,13 @@ export default function LibraryPageClient({
     async (selection: {
       organizationId: string | null;
       workspaceId: string | null;
-    }) => {
+    }): Promise<boolean> => {
       const selectionKey = buildLibrarySelectionStorageKey(
         selection.organizationId,
         selection.workspaceId,
       );
       if (snapshotInFlightSelectionKeyRef.current === selectionKey) {
-        return;
+        return true;
       }
       snapshotInFlightSelectionKeyRef.current = selectionKey;
 
@@ -2233,6 +2318,7 @@ export default function LibraryPageClient({
           `/api/library/bootstrap?${params.toString()}`,
           {
             cache: "no-store",
+            credentials: "same-origin",
           },
         );
         const payload = await readJson<LibraryBootstrapResponse>(response);
@@ -2242,7 +2328,7 @@ export default function LibraryPageClient({
         }
 
         if (snapshotRequestIdRef.current !== requestId) {
-          return;
+          return true;
         }
 
         setResources(payload?.resources ?? []);
@@ -2267,9 +2353,10 @@ export default function LibraryPageClient({
         setActiveWorkspaceId((previous) =>
           previous === resolvedWorkspaceId ? previous : resolvedWorkspaceId,
         );
+        return true;
       } catch (error) {
         if (snapshotRequestIdRef.current !== requestId) {
-          return;
+          return true;
         }
 
         setLoadError(
@@ -2278,19 +2365,18 @@ export default function LibraryPageClient({
             : "Failed to load library. Check the database setup and retry.",
         );
         setResourcesNextOffset(null);
+        return false;
       } finally {
         if (snapshotInFlightSelectionKeyRef.current === selectionKey) {
           snapshotInFlightSelectionKeyRef.current = null;
         }
 
-        if (snapshotRequestIdRef.current !== requestId) {
-          return;
+        if (snapshotRequestIdRef.current === requestId) {
+          setIsResourcesLoading(false);
+          setIsOrganizationsLoading(false);
+          setIsCategoriesLoading(false);
+          setIsWorkspacesLoading(false);
         }
-
-        setIsResourcesLoading(false);
-        setIsOrganizationsLoading(false);
-        setIsCategoriesLoading(false);
-        setIsWorkspacesLoading(false);
       }
     },
     [],
@@ -2334,6 +2420,7 @@ export default function LibraryPageClient({
         params.toString() ? `/api/categories?${params.toString()}` : "/api/categories",
         {
           cache: "no-store",
+          credentials: "same-origin",
         },
       );
       const payload = await readJson<ListCategoriesResponse>(response);
@@ -2371,6 +2458,7 @@ export default function LibraryPageClient({
         params.toString() ? `/api/workspaces?${params.toString()}` : "/api/workspaces",
         {
           cache: "no-store",
+          credentials: "same-origin",
         },
       );
       const payload = await readJson<ListWorkspacesResponse>(response);
@@ -2402,6 +2490,7 @@ export default function LibraryPageClient({
     try {
       const response = await fetch("/api/organizations", {
         cache: "no-store",
+        credentials: "same-origin",
       });
       const payload = await readJson<ListOrganizationsResponse>(response);
 
@@ -4372,6 +4461,32 @@ export default function LibraryPageClient({
     setModalOpen(true);
   }, [activeWorkspaceId, canManageResources]);
 
+  const handleOpenCreateResourceModalForCategory = useCallback(
+    (categoryName: string) => {
+      if (!canManageResources) {
+        toast.error("Insufficient permissions", {
+          description: "You do not have access to create resource cards.",
+        });
+        return;
+      }
+
+      if (!activeWorkspaceId) {
+        toast.error("Workspace unavailable", {
+          description: "Select a workspace before creating a resource card.",
+        });
+        return;
+      }
+
+      setActiveCategory(categoryName);
+      setInitialLinkDraft(null);
+      setInitialCategoryDraft(categoryName);
+      setInitialTagsDraft([]);
+      setEditingResource(null);
+      setModalOpen(true);
+    },
+    [activeWorkspaceId, canManageResources],
+  );
+
   const handleOpenCreateCategoryDialog = useCallback(() => {
     if (!canManageCategories) {
       toast.error("Insufficient permissions", {
@@ -4408,6 +4523,30 @@ export default function LibraryPageClient({
     setCreateWorkspaceDialogOpen(true);
   }, [canCreateWorkspaces, isAuthenticated]);
 
+  const handleOpenCreateWorkspaceDialogForOrganization = useCallback(
+    (organizationId: string) => {
+      if (!isAuthenticated) {
+        toast.error("Authentication required", {
+          description: "Sign in to create personal workspaces.",
+        });
+        return;
+      }
+
+      if (!canCreateWorkspaces) {
+        toast.error("Workspace limit reached", {
+          description: "Each account can create only one personal workspace.",
+        });
+        return;
+      }
+
+      setActiveOrganizationId(organizationId);
+      setActiveWorkspaceId(null);
+      setActiveCategory("All");
+      setCreateWorkspaceDialogOpen(true);
+    },
+    [canCreateWorkspaces, isAuthenticated],
+  );
+
   const handleOpenCreateOrganizationDialog = useCallback(() => {
     if (!canCreateOrganizations) {
       toast.error("Insufficient permissions", {
@@ -4428,6 +4567,24 @@ export default function LibraryPageClient({
     setConfirmDeleteWorkspace(false);
     setWorkspaceSettingsOpen(true);
   }, [activeWorkspace]);
+
+  const handleOpenWorkspaceSettingsById = useCallback(
+    (workspaceId: string) => {
+      const targetWorkspace =
+        workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
+      if (!targetWorkspace?.ownerUserId) {
+        return;
+      }
+
+      setActiveOrganizationId(targetWorkspace.organizationId);
+      setActiveWorkspaceId(targetWorkspace.id);
+      setActiveCategory("All");
+      setWorkspaceRenameInput(targetWorkspace.name);
+      setConfirmDeleteWorkspace(false);
+      setWorkspaceSettingsOpen(true);
+    },
+    [workspaces],
+  );
 
   const handleRenameWorkspace = useCallback(async () => {
     if (!activeWorkspace || !session?.user?.id) {
@@ -4522,6 +4679,48 @@ export default function LibraryPageClient({
     activeWorkspaceId,
     isRefreshingLibrary,
     loadLibrarySnapshot,
+  ]);
+
+  const handleRetryTobyImportRefresh = useCallback(() => {
+    if (isRefreshingLibrary || !tobyImportResult) {
+      return;
+    }
+
+    setIsRefreshingLibrary(true);
+    setTobyImportPhase("refreshing");
+    void (async () => {
+      try {
+        const refreshSucceeded = await loadLibrarySnapshot({
+          organizationId: activeOrganizationId,
+          workspaceId: activeWorkspaceId,
+        });
+
+        if (refreshSucceeded) {
+          setTobyImportResult((current) =>
+            current ? { ...current, needsManualRefresh: false } : current,
+          );
+          setTobyImportPhase("success");
+          toast.success("Library refreshed", {
+            description: "The imported Toby cards are now visible in the current view.",
+          });
+          return;
+        }
+
+        setTobyImportPhase("success-needs-refresh");
+        toast.error("Refresh still pending", {
+          description:
+            "The import is saved, but the library still needs a manual refresh or F5.",
+        });
+      } finally {
+        setIsRefreshingLibrary(false);
+      }
+    })();
+  }, [
+    activeOrganizationId,
+    activeWorkspaceId,
+    isRefreshingLibrary,
+    loadLibrarySnapshot,
+    tobyImportResult,
   ]);
 
   const handleLoadMoreResources = useCallback(async () => {
@@ -4624,6 +4823,8 @@ export default function LibraryPageClient({
     setTobyImportWorkspaceName(suggestTobyWorkspaceName(tobyImportFileName));
     setTobyImportSkipExactDuplicates(true);
     setTobyImportPreview(null);
+    setTobyImportPhase("idle");
+    setTobyImportResult(null);
     setTobyImportHistoryError(null);
     setTobyImportOpen(true);
   }, [
@@ -4632,6 +4833,17 @@ export default function LibraryPageClient({
     resolvedActiveWorkspaceId,
     tobyImportFileName,
   ]);
+
+  const handleResetTobyImportDraft = useCallback(() => {
+    setTobyImportRawInput("");
+    setTobyImportFileName(null);
+    setTobyImportCreateWorkspace(!resolvedActiveWorkspaceId && canCreateWorkspaces);
+    setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
+    setTobyImportSkipExactDuplicates(true);
+    setTobyImportPreview(null);
+    setTobyImportPhase("idle");
+    setTobyImportResult(null);
+  }, [canCreateWorkspaces, resolvedActiveWorkspaceId]);
 
   const handleSelectTobyJsonFile = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
@@ -4649,6 +4861,8 @@ export default function LibraryPageClient({
         setTobyImportFileName(file.name);
         setTobyImportWorkspaceName(suggestTobyWorkspaceName(file.name));
         setTobyImportPreview(null);
+        setTobyImportPhase("idle");
+        setTobyImportResult(null);
       } catch {
         toast.error("Could not read Toby file", {
           description: "The selected file could not be loaded.",
@@ -4679,6 +4893,7 @@ export default function LibraryPageClient({
         `/api/import/toby/batches?workspaceId=${encodeURIComponent(resolvedActiveWorkspaceId)}`,
         {
           cache: "no-store",
+          credentials: "same-origin",
         },
       );
       const payload = await readJson<TobyImportBatchesResponse>(response);
@@ -4769,12 +4984,15 @@ export default function LibraryPageClient({
     }
 
     setIsTobyImportPreviewing(true);
+    setTobyImportPhase("idle");
+    setTobyImportResult(null);
     try {
       const response = await fetch("/api/import/toby", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "same-origin",
         body: JSON.stringify(buildTobyImportPayload(true)),
       });
       const payload = await readJson<TobyImportResponse>(response);
@@ -4840,6 +5058,7 @@ export default function LibraryPageClient({
           `/api/import/toby/batches/${batch.id}/rollback`,
           {
             method: "POST",
+            credentials: "same-origin",
           },
         );
         const payload = await readJson<TobyImportRollbackResponse>(response);
@@ -4928,12 +5147,15 @@ export default function LibraryPageClient({
     }
 
     setIsTobyImporting(true);
+    setTobyImportPhase("importing");
+    setTobyImportResult(null);
     try {
       const response = await fetch("/api/import/toby", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "same-origin",
         body: JSON.stringify(buildTobyImportPayload(false)),
       });
       const payload = await readJson<TobyImportResponse>(response);
@@ -4950,17 +5172,10 @@ export default function LibraryPageClient({
         payload?.workspaceId ??
         resolvedActiveWorkspaceId;
 
-      await loadLibrarySnapshot({
-        organizationId: snapshotOrganizationId,
-        workspaceId: snapshotWorkspaceId,
-      });
-      setTobyImportOpen(false);
-      setTobyImportRawInput("");
-      setTobyImportFileName(null);
-      setTobyImportCreateWorkspace(false);
-      setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
-      setTobyImportSkipExactDuplicates(true);
       setTobyImportPreview(null);
+      setActiveOrganizationId(snapshotOrganizationId);
+      setActiveWorkspaceId(snapshotWorkspaceId);
+      setActiveCategory("All");
 
       const importedResources = payload?.importedResources ?? 0;
       const importedCards = payload?.importedCards ?? importedResources;
@@ -4970,10 +5185,53 @@ export default function LibraryPageClient({
       const importedWorkspaceName = payload?.workspace?.name;
       const rollbackAvailable = payload?.rollbackAvailable !== false;
 
+      setTobyImportHistoryAvailable(rollbackAvailable);
+      setTobyImportHistoryError(
+        rollbackAvailable
+          ? null
+          : "Import rollback history is not available for this import yet.",
+      );
+
+      if (payload?.importBatch) {
+        setTobyImportBatches((current) => [
+          payload.importBatch!,
+          ...current.filter((batch) => batch.id !== payload.importBatch?.id),
+        ]);
+      }
+
       toast.success("Toby import complete", {
         description: `${importedResources} of ${importedCards} card(s) imported across ${importedLists} list(s)${importedWorkspaceName ? ` into ${importedWorkspaceName}` : ""}${skippedExactDuplicates > 0 ? `, ${skippedExactDuplicates} exact duplicate(s) skipped` : ""}${failed > 0 ? `, ${failed} failed` : ""}${rollbackAvailable ? "." : ". Rollback history is not available for this import yet."}`,
       });
+
+      setTobyImportPhase("refreshing");
+      const refreshSucceeded = await loadLibrarySnapshot({
+        organizationId: snapshotOrganizationId,
+        workspaceId: snapshotWorkspaceId,
+      });
+
+      setTobyImportResult({
+        workspaceName: importedWorkspaceName ?? null,
+        importedLists,
+        importedCards,
+        importedResources,
+        skippedExactDuplicates,
+        failed,
+        rollbackAvailable,
+        needsManualRefresh: !refreshSucceeded,
+      });
+      setTobyImportPhase(
+        refreshSucceeded ? "success" : "success-needs-refresh",
+      );
+
+      if (!refreshSucceeded) {
+        toast("Import finished, refresh is still needed", {
+          description:
+            "The Toby import was saved, but the library did not refresh automatically. Use Refresh library or F5.",
+        });
+      }
     } catch (error) {
+      setTobyImportPhase("error");
+      setTobyImportResult(null);
       toast.error("Toby import failed", {
         description:
           error instanceof Error
@@ -4984,7 +5242,6 @@ export default function LibraryPageClient({
       setIsTobyImporting(false);
     }
   }, [
-    canCreateWorkspaces,
     canManageResources,
     buildTobyImportPayload,
     loadLibrarySnapshot,
@@ -5098,6 +5355,104 @@ export default function LibraryPageClient({
     },
     [],
   );
+
+  const handleAiInboxPolishSelected = useCallback(async () => {
+    if (aiInboxItems.length === 0) {
+      toast.error("No links available", {
+        description: "Analyze at least one URL first.",
+      });
+      return;
+    }
+
+    const selectedItems = aiInboxItems.filter((item) => item.selected);
+    if (selectedItems.length === 0) {
+      toast.error("Nothing selected", {
+        description: "Select one or more analyzed links to polish.",
+      });
+      return;
+    }
+
+    const categoryHints = categoryRecords
+      .filter((category) => category.workspaceId === activeWorkspaceId)
+      .map((category) => category.name)
+      .filter((category) => category.trim().length > 0);
+
+    setIsAiInboxPolishing(true);
+    try {
+      const response = await fetch("/api/links/refine-batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          useAi: aiInboxUseAi && canUseAiFeatures,
+          categories: categoryHints,
+          items: selectedItems.map((item) => ({
+            id: item.id,
+            url: item.url,
+            label: item.label,
+            note: item.note,
+            category: item.category,
+            tags: item.tags,
+          })),
+        }),
+      });
+      const payload = await readJson<AiInboxRefineResponse>(response);
+      if (!response.ok || !payload?.items) {
+        throw new Error(payload?.error ?? "Could not polish selected links.");
+      }
+
+      const refinedById = new Map(payload.items.map((item) => [item.id, item]));
+      setAiInboxItems((previous) =>
+        previous.map((item) => {
+          const refined = refinedById.get(item.id);
+          if (!refined) {
+            return item;
+          }
+
+          return {
+            ...item,
+            label: refined.label || item.label,
+            note: refined.note,
+            category: refined.category,
+            tags: refined.tags.length > 0 ? refined.tags : item.tags,
+            usedAi: payload.usedAi === true ? true : item.usedAi,
+            model: payload.usedAi === true ? payload.model ?? item.model : item.model,
+            error: null,
+          };
+        }),
+      );
+      setAiInboxSummary(null);
+
+      toast.success("AI Inbox polished", {
+        description:
+          payload.usedAi === true
+            ? `${selectedItems.length} link(s) refined with AI.`
+            : `${selectedItems.length} link(s) normalized without AI.`,
+      });
+
+      if (payload.warning) {
+        toast.warning("Polish fallback", {
+          description: payload.warning,
+        });
+      }
+    } catch (error) {
+      toast.error("Polish failed", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not polish the selected links.",
+      });
+    } finally {
+      setIsAiInboxPolishing(false);
+    }
+  }, [
+    activeWorkspaceId,
+    aiInboxItems,
+    aiInboxUseAi,
+    canUseAiFeatures,
+    categoryRecords,
+  ]);
 
   const handleAiInboxAutoGroup = useCallback(() => {
     if (aiInboxItems.length === 0) {
@@ -5423,7 +5778,7 @@ export default function LibraryPageClient({
       toast.success("Summary ready", {
         description:
           payload.usedAi === true
-            ? `Generated with AI${payload.model ? ` (${payload.model})` : ""}.`
+            ? "Generated with AI."
             : "Generated with fallback heuristics.",
       });
       if (payload.warning) {
@@ -5840,9 +6195,75 @@ export default function LibraryPageClient({
     setAskLibraryFollowUpSuggestions([]);
     setAskLibraryUsedAi(false);
     setAskLibraryModel(null);
+    setAskLibraryBrief(null);
     setAskLibraryQuery(searchQuery.trim());
     setAskScopeSelectedTags([]);
   }, [searchQuery]);
+
+  const handleAskLibraryBrief = useCallback(async () => {
+    setIsAskLibraryBriefing(true);
+    try {
+      const response = await fetch("/api/library/brief", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId: activeWorkspaceId,
+          category: activeCategory === "All" ? null : activeCategory,
+          tags: askScopeTags ? askScopeSelectedTags : [],
+          scopeWorkspace: askScopeWorkspace,
+          scopeCategory: askScopeCategory,
+          scopeTags: askScopeTags,
+          useAi: canUseAiFeatures,
+        }),
+      });
+      const payload = await readJson<AskLibraryBriefResponse>(response);
+      if (!response.ok || !payload?.summary) {
+        throw new Error(payload?.error ?? "Could not create a scope brief.");
+      }
+
+      setAskLibraryBrief({
+        summary: payload.summary,
+        focusAreas: payload.focusAreas ?? [],
+        gaps: payload.gaps ?? [],
+        suggestedQuestions: payload.suggestedQuestions ?? [],
+        resourceCount: payload.resourceCount ?? 0,
+        usedAi: payload.usedAi === true,
+        model: payload.model ?? null,
+      });
+
+      toast.success("Scope brief ready", {
+        description:
+          payload.usedAi === true
+            ? "Generated with AI."
+            : "Generated with fallback heuristics.",
+      });
+
+      if (payload.warning) {
+        toast.warning("Brief fallback", {
+          description: payload.warning,
+        });
+      }
+    } catch (error) {
+      toast.error("Scope brief failed", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not create a scope brief.",
+      });
+    } finally {
+      setIsAskLibraryBriefing(false);
+    }
+  }, [
+    activeCategory,
+    activeWorkspaceId,
+    askScopeCategory,
+    askScopeSelectedTags,
+    askScopeTags,
+    askScopeWorkspace,
+    canUseAiFeatures,
+  ]);
 
   const handleAskLibrarySubmit = useCallback(
     async (nextQuestion?: string) => {
@@ -5878,6 +6299,7 @@ export default function LibraryPageClient({
             scopeCategory: askScopeCategory,
             scopeTags: askScopeTags,
             useAi: canUseAiFeatures,
+            mode: askLibraryMode,
             maxCitations: 5,
             history: historyPayload,
           }),
@@ -5945,6 +6367,7 @@ export default function LibraryPageClient({
       askScopeSelectedTags,
       askScopeTags,
       askScopeWorkspace,
+      askLibraryMode,
       canUseAiFeatures,
       fetchAskLibraryThreads,
       sessionUserId,
@@ -6495,8 +6918,13 @@ export default function LibraryPageClient({
             }}
             canCreateOrganization={canCreateOrganizations}
             onCreateOrganization={handleOpenCreateOrganizationDialog}
+            canCreateWorkspaceInOrganization={canCreateWorkspaces}
+            onCreateWorkspaceForOrganization={
+              handleOpenCreateWorkspaceDialogForOrganization
+            }
             showSettingsButton
             onOpenSettings={() => setGeneralSettingsOpen(true)}
+            onRefresh={handleRefreshLibrary}
           />
         </aside>
 
@@ -6518,6 +6946,9 @@ export default function LibraryPageClient({
             }}
             canCreateWorkspace={canCreateWorkspaces}
             onCreateWorkspace={handleOpenCreateWorkspaceDialog}
+            onOpenWorkspaceSettings={handleOpenWorkspaceSettingsById}
+            canCustomizeWorkspace={(workspace) => Boolean(workspace.ownerUserId)}
+            onRefresh={handleRefreshLibrary}
             resourceCountsByWorkspace={workspaceResourceCounts}
           />
         </aside>
@@ -6556,6 +6987,7 @@ export default function LibraryPageClient({
               onOpenWorkspaceSettings={
                 activeWorkspace?.ownerUserId ? handleOpenWorkspaceSettings : undefined
               }
+              onRefresh={handleRefreshLibrary}
               headingLabel={sidebarHeadingLabel}
               headingMeta={sidebarHeadingMeta}
               headingCount={categories.length}
@@ -6606,6 +7038,11 @@ export default function LibraryPageClient({
                   }}
                   canCreateOrganization={canCreateOrganizations}
                   onCreateOrganization={handleOpenCreateOrganizationDialog}
+                  canCreateWorkspaceInOrganization={canCreateWorkspaces}
+                  onCreateWorkspaceForOrganization={
+                    handleOpenCreateWorkspaceDialogForOrganization
+                  }
+                  onRefresh={handleRefreshLibrary}
                 />
               </div>
             </div>
@@ -6626,6 +7063,9 @@ export default function LibraryPageClient({
                   }}
                   canCreateWorkspace={canCreateWorkspaces}
                   onCreateWorkspace={handleOpenCreateWorkspaceDialog}
+                  onOpenWorkspaceSettings={handleOpenWorkspaceSettingsById}
+                  canCustomizeWorkspace={(workspace) => Boolean(workspace.ownerUserId)}
+                  onRefresh={handleRefreshLibrary}
                   resourceCountsByWorkspace={workspaceResourceCounts}
                 />
               </div>
@@ -6681,6 +7121,7 @@ export default function LibraryPageClient({
                 handleDropLinkItemToSidebarCategory(input);
                 setSidebarOpen(false);
               }}
+              onRefresh={handleRefreshLibrary}
               showHeading={false}
             />
           </SheetContent>
@@ -7129,7 +7570,14 @@ export default function LibraryPageClient({
                     dragEnabled={canManageResources && !isSearchActive}
                     canManageResource={canManageResourceCard}
                     canEditCategoryByName={canEditCategoryByName}
+                    onSelectCategory={setActiveCategory}
                     onEditCategory={handleOpenEditCategoryDialogByName}
+                    onCreateResourceInCategory={handleOpenCreateResourceModalForCategory}
+                    onPasteIntoCategory={handlePasteIntoCategory}
+                    onDeleteCategory={(category) => {
+                      void handleDeleteCategoryByName(category);
+                    }}
+                    onRefresh={handleRefreshLibrary}
                     onMoveItem={handleMoveResourceItem}
                     onDelete={handleDelete}
                     onEdit={handleEdit}
@@ -7258,12 +7706,7 @@ export default function LibraryPageClient({
 
           setTobyImportOpen(open);
           if (!open) {
-            setTobyImportRawInput("");
-            setTobyImportFileName(null);
-            setTobyImportCreateWorkspace(false);
-            setTobyImportWorkspaceName(DEFAULT_TOBY_WORKSPACE_NAME);
-            setTobyImportSkipExactDuplicates(true);
-            setTobyImportPreview(null);
+            handleResetTobyImportDraft();
             setTobyImportBatches([]);
             setTobyImportHistoryAvailable(true);
             setTobyImportHistoryError(null);
@@ -7281,6 +7724,68 @@ export default function LibraryPageClient({
           </DialogHeader>
 
           <div className="space-y-4">
+            {tobyImportPhase === "importing" || tobyImportPhase === "refreshing" ? (
+              <Alert className="border-primary/20 bg-primary/5">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <AlertTitle>
+                  {tobyImportPhase === "importing"
+                    ? "Importing Toby JSON"
+                    : "Refreshing library view"}
+                </AlertTitle>
+                <AlertDescription>
+                  {tobyImportPhase === "importing"
+                    ? "Saving imported cards now. We will refresh the active library view right after."
+                    : "The import is already saved. We are updating the visible workspace so you can see it without reloading."}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {tobyImportResult ? (
+              <Alert
+                className={
+                  tobyImportResult.needsManualRefresh
+                    ? "border-amber-500/30 bg-amber-500/5"
+                    : "border-emerald-500/25 bg-emerald-500/5"
+                }
+              >
+                {tobyImportResult.needsManualRefresh ? (
+                  <CircleAlert className="h-4 w-4 text-amber-600" />
+                ) : (
+                  <BadgeCheck className="h-4 w-4 text-emerald-600" />
+                )}
+                <AlertTitle>
+                  {tobyImportResult.needsManualRefresh
+                    ? "Import saved, refresh still needed"
+                    : "Toby import complete"}
+                </AlertTitle>
+                <AlertDescription className="space-y-1">
+                  <p>
+                    {tobyImportResult.importedResources} of {tobyImportResult.importedCards} card(s) imported across{" "}
+                    {tobyImportResult.importedLists} list(s)
+                    {tobyImportResult.workspaceName
+                      ? ` into ${tobyImportResult.workspaceName}`
+                      : ""}.
+                  </p>
+                  <p>
+                    {tobyImportResult.skippedExactDuplicates > 0
+                      ? `${tobyImportResult.skippedExactDuplicates} duplicate(s) skipped. `
+                      : ""}
+                    {tobyImportResult.failed > 0
+                      ? `${tobyImportResult.failed} card(s) failed. `
+                      : ""}
+                    {tobyImportResult.rollbackAvailable
+                      ? "Rollback history is available below."
+                      : "Rollback history is not available for this import yet."}
+                  </p>
+                  {tobyImportResult.needsManualRefresh ? (
+                    <p>Use Refresh library or F5 once to see the imported cards immediately.</p>
+                  ) : (
+                    <p>The workspace view has been updated. You can close this dialog or import another file.</p>
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
             <div className="space-y-3 rounded-md border border-border/70 bg-card/50 p-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -7298,6 +7803,8 @@ export default function LibraryPageClient({
                   onCheckedChange={(checked) => {
                     setTobyImportCreateWorkspace(checked);
                     setTobyImportPreview(null);
+                    setTobyImportPhase("idle");
+                    setTobyImportResult(null);
                   }}
                   disabled={!canCreateWorkspaces || !resolvedActiveWorkspaceId}
                   aria-label="Create a new workspace for this import"
@@ -7313,6 +7820,8 @@ export default function LibraryPageClient({
                     onChange={(event) => {
                       setTobyImportWorkspaceName(event.target.value);
                       setTobyImportPreview(null);
+                      setTobyImportPhase("idle");
+                      setTobyImportResult(null);
                     }}
                     placeholder={DEFAULT_TOBY_WORKSPACE_NAME}
                     maxLength={80}
@@ -7358,6 +7867,8 @@ export default function LibraryPageClient({
                 onChange={(event) => {
                   setTobyImportRawInput(event.target.value);
                   setTobyImportPreview(null);
+                  setTobyImportPhase("idle");
+                  setTobyImportResult(null);
                 }}
                 placeholder='{"version":3,"lists":[...]}'
                 rows={14}
@@ -7381,7 +7892,11 @@ export default function LibraryPageClient({
                 </div>
                 <Switch
                   checked={tobyImportSkipExactDuplicates}
-                  onCheckedChange={setTobyImportSkipExactDuplicates}
+                  onCheckedChange={(checked) => {
+                    setTobyImportSkipExactDuplicates(checked);
+                    setTobyImportPhase("idle");
+                    setTobyImportResult(null);
+                  }}
                   disabled={isTobyImporting}
                   aria-label="Skip exact duplicate links during Toby import"
                 />
@@ -7520,42 +8035,73 @@ export default function LibraryPageClient({
             </div>
 
             <div className="flex justify-end gap-2">
+              {isTobyImporting ? (
+                <p className="mr-auto self-center text-xs text-muted-foreground">
+                  {tobyImportPhase === "refreshing"
+                    ? "Refreshing the current library view..."
+                    : "Importing Toby JSON and saving cards..."}
+                </p>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setTobyImportOpen(false)}
                 disabled={isTobyImporting}
               >
-                Cancel
+                {tobyImportResult ? "Close" : "Cancel"}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void handlePreviewTobyImport()}
-                disabled={
-                  isTobyImporting ||
-                  isTobyImportPreviewing ||
-                  (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) ||
-                  (tobyImportCreateWorkspace &&
-                    tobyImportWorkspaceName.trim().length === 0) ||
-                  tobyImportRawInput.trim().length === 0
-                }
-              >
-                {isTobyImportPreviewing ? "Previewing..." : "Preview"}
-              </Button>
-              <Button
-                type="button"
-                onClick={() => void handleImportTobyJson()}
-                disabled={
-                  isTobyImporting ||
-                  (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) ||
-                  (tobyImportCreateWorkspace &&
-                    tobyImportWorkspaceName.trim().length === 0) ||
-                  tobyImportRawInput.trim().length === 0
-                }
-              >
-                {isTobyImporting ? "Importing..." : "Import Toby JSON"}
-              </Button>
+              {tobyImportResult ? (
+                <>
+                  {tobyImportResult.needsManualRefresh ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleRetryTobyImportRefresh}
+                      disabled={isRefreshingLibrary}
+                    >
+                      {isRefreshingLibrary ? "Refreshing..." : "Refresh library"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    onClick={handleResetTobyImportDraft}
+                    disabled={isTobyImporting}
+                  >
+                    Import another
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handlePreviewTobyImport()}
+                    disabled={
+                      isTobyImporting ||
+                      isTobyImportPreviewing ||
+                      (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) ||
+                      (tobyImportCreateWorkspace &&
+                        tobyImportWorkspaceName.trim().length === 0) ||
+                      tobyImportRawInput.trim().length === 0
+                    }
+                  >
+                    {isTobyImportPreviewing ? "Previewing..." : "Preview"}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void handleImportTobyJson()}
+                    disabled={
+                      isTobyImporting ||
+                      (!resolvedActiveWorkspaceId && !tobyImportCreateWorkspace) ||
+                      (tobyImportCreateWorkspace &&
+                        tobyImportWorkspaceName.trim().length === 0) ||
+                      tobyImportRawInput.trim().length === 0
+                    }
+                  >
+                    {isTobyImporting ? "Importing..." : "Import Toby JSON"}
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </DialogContent>
@@ -7680,6 +8226,16 @@ export default function LibraryPageClient({
                 <Button
                   type="button"
                   variant="outline"
+                  onClick={() => void handleAiInboxPolishSelected()}
+                  disabled={isAiInboxBusy || aiInboxSelectedCount === 0}
+                >
+                  {isAiInboxPolishing
+                    ? "Polishing..."
+                    : `Polish selected (${aiInboxSelectedCount})`}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
                   onClick={handleAiInboxAutoGroup}
                   disabled={isAiInboxBusy || aiInboxItems.length === 0}
                 >
@@ -7752,9 +8308,7 @@ export default function LibraryPageClient({
                     Batch summary
                   </p>
                   <span className="text-[11px] text-muted-foreground">
-                    {aiInboxSummary.usedAi
-                      ? `AI${aiInboxSummary.model ? ` (${aiInboxSummary.model})` : ""}`
-                      : "Fallback"}
+                    {aiInboxSummary.usedAi ? "AI-assisted" : "Fallback"}
                     {` • ${aiInboxSummary.analyzed} link(s)`}
                   </span>
                 </div>
@@ -7821,7 +8375,7 @@ export default function LibraryPageClient({
                         <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                           {item.usedAi ? (
                             <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-300">
-                              AI{item.model ? ` (${item.model})` : ""}
+                              AI-assisted
                             </span>
                           ) : (
                             <span className="rounded-full border border-border/70 bg-card px-2 py-0.5 text-muted-foreground">
@@ -7924,6 +8478,7 @@ export default function LibraryPageClient({
         onOpenChange={(open) => {
           setAskLibraryOpen(open);
           if (!open) {
+            setIsAskLibraryBriefing(false);
             setIsAskingLibrary(false);
             setIsAskLibraryThreadLoading(false);
           }
@@ -8011,6 +8566,33 @@ export default function LibraryPageClient({
               <p className="text-xs text-muted-foreground">
                 Follow-up prompts use the latest conversation context.
               </p>
+              <div className="space-y-1.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Answer style
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    ["concise", "Concise"],
+                    ["deep", "Deep dive"],
+                    ["actions", "Action plan"],
+                  ] as const).map(([mode, label]) => (
+                    <Button
+                      key={`ask-mode-${mode}`}
+                      type="button"
+                      variant={askLibraryMode === mode ? "secondary" : "outline"}
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setAskLibraryMode(mode)}
+                      disabled={isAskingLibrary || isAskLibraryThreadLoading}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Choose concise for quick answers, deep dive for synthesis, or action plan for next steps.
+                </p>
+              </div>
             </div>
 
             <div className="space-y-2 rounded-md border border-border/70 bg-card/50 p-3">
@@ -8094,6 +8676,72 @@ export default function LibraryPageClient({
               ) : null}
             </div>
 
+            {askLibraryBrief ? (
+              <div className="space-y-3 rounded-md border border-border/70 bg-card/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Scope brief
+                  </p>
+                  <span className="text-[11px] text-muted-foreground">
+                    {askLibraryBrief.usedAi ? "AI-assisted" : "Fallback"}
+                    {` • ${askLibraryBrief.resourceCount} resource(s)`}
+                  </span>
+                </div>
+                <p className="text-sm text-foreground">{askLibraryBrief.summary}</p>
+                {askLibraryBrief.focusAreas.length > 0 ? (
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Focus areas
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {askLibraryBrief.focusAreas.map((area) => (
+                        <span
+                          key={`ask-brief-focus-${area}`}
+                          className="rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-foreground"
+                        >
+                          {area}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {askLibraryBrief.gaps.length > 0 ? (
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Gaps
+                    </p>
+                    <ul className="space-y-1 text-xs text-muted-foreground">
+                      {askLibraryBrief.gaps.map((gap) => (
+                        <li key={`ask-brief-gap-${gap}`}>• {gap}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {askLibraryBrief.suggestedQuestions.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Suggested questions
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {askLibraryBrief.suggestedQuestions.map((question) => (
+                        <Button
+                          key={`ask-brief-question-${question}`}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-auto whitespace-normal text-left text-xs"
+                          disabled={isAskingLibrary || isAskLibraryThreadLoading}
+                          onClick={() => setAskLibraryQuery(question)}
+                        >
+                          {question}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Button
@@ -8113,6 +8761,20 @@ export default function LibraryPageClient({
                 ) : null}
               </div>
               <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void handleAskLibraryBrief();
+                  }}
+                  disabled={
+                    isAskingLibrary ||
+                    isAskLibraryThreadLoading ||
+                    isAskLibraryBriefing
+                  }
+                >
+                  {isAskLibraryBriefing ? "Briefing..." : "Brief this scope"}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -8163,9 +8825,7 @@ export default function LibraryPageClient({
                         </p>
                         {turn.role === "assistant" ? (
                           <span className="text-[11px] text-muted-foreground">
-                            {turn.usedAi
-                              ? `AI${turn.model ? ` (${turn.model})` : ""}`
-                              : "Rule-based"}
+                            {turn.usedAi ? "AI-assisted" : "Rule-based"}
                           </span>
                         ) : null}
                       </div>
@@ -8181,11 +8841,16 @@ export default function LibraryPageClient({
             {askLibraryAnswer ? (
               <div className="space-y-3 rounded-md border border-border/70 bg-card/60 p-4">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-foreground">Answer</p>
+                  <p className="text-sm font-semibold text-foreground">
+                    Answer
+                    {askLibraryMode === "deep"
+                      ? " • Deep dive"
+                      : askLibraryMode === "actions"
+                        ? " • Action plan"
+                        : " • Concise"}
+                  </p>
                   <span className="text-xs text-muted-foreground">
-                    {askLibraryUsedAi
-                      ? `AI${askLibraryModel ? ` (${askLibraryModel})` : ""}`
-                      : "Rule-based"}
+                    {askLibraryUsedAi ? "AI-assisted" : "Rule-based"}
                   </span>
                 </div>
                 <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">

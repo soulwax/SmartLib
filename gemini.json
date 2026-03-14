@@ -1,0 +1,5 @@
+{
+  "model": "gemini-2.5-flash",
+  "gemini.agentMode": true,
+  "gemini.contextWindow": "1m"
+}

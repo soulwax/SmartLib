@@ -1,10 +1,18 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import type { ResourceWorkspace } from "@/lib/resources";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -12,7 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, Plus, RefreshCw, Settings2 } from "lucide-react";
 
 type WorkspaceRailOrientation = "vertical" | "horizontal";
 
@@ -48,7 +56,10 @@ interface WorkspaceRailProps {
   activeWorkspaceId: string | null;
   onWorkspaceChange: (workspaceId: string) => void;
   onCreateWorkspace?: () => void;
+  onOpenWorkspaceSettings?: (workspaceId: string) => void;
+  canCustomizeWorkspace?: (workspace: ResourceWorkspace) => boolean;
   canCreateWorkspace?: boolean;
+  onRefresh?: () => void;
   resourceCountsByWorkspace?: Record<string, number>;
   orientation?: WorkspaceRailOrientation;
   isLoading?: boolean;
@@ -86,7 +97,10 @@ export function WorkspaceRail({
   activeWorkspaceId,
   onWorkspaceChange,
   onCreateWorkspace,
+  onOpenWorkspaceSettings,
+  canCustomizeWorkspace,
   canCreateWorkspace = false,
+  onRefresh,
   resourceCountsByWorkspace = {},
   orientation = "vertical",
   isLoading = false,
@@ -130,39 +144,84 @@ export function WorkspaceRail({
 
   const showLoadingState = isLoading && sortedWorkspaces.length === 0;
   const skeletonCount = isVertical ? 5 : 6;
+  const activeWorkspace =
+    sortedWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+
+  const canCustomizeTargetWorkspace = (workspace: ResourceWorkspace): boolean =>
+    onOpenWorkspaceSettings
+      ? (canCustomizeWorkspace?.(workspace) ?? Boolean(workspace.ownerUserId))
+      : false;
+
+  const wrapWorkspaceItemMenu = (
+    workspace: ResourceWorkspace,
+    content: ReactNode,
+  ) => (
+    <ContextMenu key={workspace.id}>
+      <ContextMenuTrigger asChild>{content}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56">
+        <ContextMenuLabel>{workspace.name}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => onWorkspaceChange(workspace.id)}>
+          Open collection
+        </ContextMenuItem>
+        {canCustomizeTargetWorkspace(workspace) ? (
+          <ContextMenuItem
+            onSelect={() => onOpenWorkspaceSettings?.(workspace.id)}
+          >
+            <Settings2 className="mr-2 h-4 w-4" />
+            Customize collection
+          </ContextMenuItem>
+        ) : null}
+        {canCreateWorkspace && onCreateWorkspace ? (
+          <ContextMenuItem onSelect={onCreateWorkspace}>
+            <Plus className="mr-2 h-4 w-4" />
+            New collection
+          </ContextMenuItem>
+        ) : null}
+        {onRefresh ? (
+          <ContextMenuItem onSelect={onRefresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh library
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 
   return (
-    <div className={cn("flex h-full flex-col", !isVertical ? "w-full" : undefined)}>
-      {renderAsList ? (
-        <div className="border-b border-border/70 px-3 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[0.66rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/80">
-                Workspaces
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Collections inside the active organization
-              </p>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className={cn("flex h-full flex-col", !isVertical ? "w-full" : undefined)}>
+          {renderAsList ? (
+            <div className="border-b border-border/70 px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.66rem] font-semibold uppercase tracking-[0.24em] text-muted-foreground/80">
+                    Workspaces
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Collections inside the active organization
+                  </p>
+                </div>
+                <span className="rounded-full border border-border/70 bg-secondary/65 px-2 py-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  {sortedWorkspaces.length}
+                </span>
+              </div>
             </div>
-            <span className="rounded-full border border-border/70 bg-secondary/65 px-2 py-0.5 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              {sortedWorkspaces.length}
-            </span>
-          </div>
-        </div>
-      ) : null}
+          ) : null}
 
-      <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
-        <div
-          className={cn(
-            renderAsList
-              ? "flex flex-col gap-4 px-2 py-3"
-              : compactMode
-                ? "flex gap-1 p-1.5"
-                : "flex gap-1.5 p-2",
-            isVertical && !renderAsList ? "h-full flex-col items-center" : undefined,
-            !isVertical ? "items-center" : undefined,
-          )}
-        >
+          <ScrollArea className={cn("h-full", !isVertical ? "w-full" : undefined)}>
+            <div
+              className={cn(
+                renderAsList
+                  ? "flex flex-col gap-4 px-2 py-3"
+                  : compactMode
+                    ? "flex gap-1 p-1.5"
+                    : "flex gap-1.5 p-2",
+                isVertical && !renderAsList ? "h-full flex-col items-center" : undefined,
+                !isVertical ? "items-center" : undefined,
+              )}
+            >
           {showLoadingState ? (
             Array.from({ length: skeletonCount }, (_, index) => (
               <Skeleton
@@ -194,8 +253,9 @@ export function WorkspaceRail({
                       ? "Private collection"
                       : "Shared collection";
 
-                    return (
-                      <Tooltip key={workspace.id}>
+                    return wrapWorkspaceItemMenu(
+                      workspace,
+                      <Tooltip>
                         <TooltipTrigger asChild>
                           <button
                             type="button"
@@ -253,7 +313,7 @@ export function WorkspaceRail({
                         <TooltipContent side="right">
                           {workspace.name} - {count} resource{count === 1 ? "" : "s"}
                         </TooltipContent>
-                      </Tooltip>
+                      </Tooltip>,
                     );
                   })}
                 </div>
@@ -266,8 +326,9 @@ export function WorkspaceRail({
               const count = resourceCountsByWorkspace[workspace.id] ?? 0;
               const isSharedWorkspace = !workspace.ownerUserId;
 
-              return (
-                <Tooltip key={workspace.id}>
+              return wrapWorkspaceItemMenu(
+                workspace,
+                <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
@@ -297,7 +358,7 @@ export function WorkspaceRail({
                   <TooltipContent side={isVertical ? "right" : "bottom"}>
                     {workspace.name} - {count} resource{count === 1 ? "" : "s"}
                   </TooltipContent>
-                </Tooltip>
+                </Tooltip>,
               );
             })
           )}
@@ -347,8 +408,35 @@ export function WorkspaceRail({
               </Tooltip>
             )
           ) : null}
+            </div>
+          </ScrollArea>
         </div>
-      </ScrollArea>
-    </div>
+      </ContextMenuTrigger>
+
+      <ContextMenuContent className="w-56">
+        <ContextMenuLabel>Workspace list</ContextMenuLabel>
+        <ContextMenuSeparator />
+        {canCreateWorkspace && onCreateWorkspace ? (
+          <ContextMenuItem onSelect={onCreateWorkspace}>
+            <Plus className="mr-2 h-4 w-4" />
+            New collection
+          </ContextMenuItem>
+        ) : null}
+        {activeWorkspace && canCustomizeTargetWorkspace(activeWorkspace) ? (
+          <ContextMenuItem
+            onSelect={() => onOpenWorkspaceSettings?.(activeWorkspace.id)}
+          >
+            <Settings2 className="mr-2 h-4 w-4" />
+            Customize current collection
+          </ContextMenuItem>
+        ) : null}
+        {onRefresh ? (
+          <ContextMenuItem onSelect={onRefresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh library
+          </ContextMenuItem>
+        ) : null}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

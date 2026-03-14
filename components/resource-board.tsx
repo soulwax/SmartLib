@@ -14,11 +14,30 @@ import { cn } from "@/lib/utils"
 import { ResourceCardItem } from "@/components/resource-card"
 import { Button } from "@/components/ui/button"
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
-import { Copy, ExternalLink, FolderClosed, FolderOpen, Sparkles } from "lucide-react"
+import {
+  ClipboardPaste,
+  Copy,
+  ExternalLink,
+  FolderClosed,
+  FolderOpen,
+  FolderPlus,
+  Pencil,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+} from "lucide-react"
 import { toast } from "sonner"
 
 const MAX_ORDER = Number.MAX_SAFE_INTEGER
@@ -78,7 +97,12 @@ interface ResourceBoardProps {
   dragEnabled: boolean
   canManageResource: (resource: ResourceCard) => boolean
   canEditCategoryByName: (category: string) => boolean
+  onSelectCategory?: (category: string) => void
   onEditCategory: (category: string) => void
+  onCreateResourceInCategory?: (category: string) => void
+  onPasteIntoCategory?: (category: string) => void
+  onDeleteCategory?: (category: string) => void
+  onRefresh?: () => void
   onMoveItem: (input: ResourceBoardMoveInput) => void | Promise<void>
   onDelete: (id: string) => void
   onEdit: (resource: ResourceCard) => void
@@ -169,7 +193,12 @@ export function ResourceBoard({
   dragEnabled,
   canManageResource,
   canEditCategoryByName,
+  onSelectCategory,
   onEditCategory,
+  onCreateResourceInCategory,
+  onPasteIntoCategory,
+  onDeleteCategory,
+  onRefresh,
   onMoveItem,
   onDelete,
   onEdit,
@@ -359,6 +388,77 @@ export function ResourceBoard({
     setDropTarget(null)
   }
 
+  const renderColumnContextMenu = useCallback(
+    (column: ResourceBoardColumn, content: React.ReactNode) => {
+      const canCustomizeCategory = canEditCategoryByName(column.name)
+
+      return (
+        <ContextMenu key={column.id ?? column.name}>
+          <ContextMenuTrigger asChild>{content}</ContextMenuTrigger>
+          <ContextMenuContent className="w-56">
+            <ContextMenuLabel>
+              {column.symbol ? `${column.symbol} ` : ""}
+              {column.name}
+            </ContextMenuLabel>
+            <ContextMenuSeparator />
+            {onSelectCategory ? (
+              <ContextMenuItem onSelect={() => onSelectCategory(column.name)}>
+                View category
+              </ContextMenuItem>
+            ) : null}
+            {onCreateResourceInCategory ? (
+              <ContextMenuItem
+                onSelect={() => onCreateResourceInCategory(column.name)}
+              >
+                <FolderPlus className="mr-2 h-4 w-4" />
+                Add resource here
+              </ContextMenuItem>
+            ) : null}
+            {onPasteIntoCategory ? (
+              <ContextMenuItem onSelect={() => onPasteIntoCategory(column.name)}>
+                <ClipboardPaste className="mr-2 h-4 w-4" />
+                Paste URL here
+              </ContextMenuItem>
+            ) : null}
+            {canCustomizeCategory ? (
+              <ContextMenuItem onSelect={() => onEditCategory(column.name)}>
+                <Pencil className="mr-2 h-4 w-4" />
+                Customize category
+              </ContextMenuItem>
+            ) : null}
+            {canCustomizeCategory && onDeleteCategory ? (
+              <ContextMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={() => onDeleteCategory(column.name)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete category
+              </ContextMenuItem>
+            ) : null}
+            {onRefresh ? (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={onRefresh}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh library
+                </ContextMenuItem>
+              </>
+            ) : null}
+          </ContextMenuContent>
+        </ContextMenu>
+      )
+    },
+    [
+      canEditCategoryByName,
+      onCreateResourceInCategory,
+      onDeleteCategory,
+      onEditCategory,
+      onPasteIntoCategory,
+      onRefresh,
+      onSelectCategory,
+    ],
+  )
+
   if (compactMode) {
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden pb-0.5">
@@ -407,7 +507,8 @@ export function ResourceBoard({
                   ? `${row.column.symbol} ${row.column.name}`
                   : row.column.name
 
-                return (
+                return renderColumnContextMenu(
+                  row.column,
                   <div style={style} className="px-0.5">
                     <div className="flex h-[30px] items-center gap-1 rounded-sm border border-border/65 bg-card/65 px-1">
                       <button
@@ -525,7 +626,7 @@ export function ResourceBoard({
                         </div>
                       )}
                     </div>
-                  </div>
+                  </div>,
                 )
               }}
             </FixedSizeList>
@@ -546,11 +647,9 @@ export function ResourceBoard({
         {columns.map((column) => {
           const items = resourcesByCategory.get(column.name) ?? []
 
-          return (
-            <section
-              key={column.name}
-              className="mb-3 block w-full break-inside-avoid rounded-lg border border-border/45 bg-card/35 p-2.5 sm:mb-4"
-            >
+          return renderColumnContextMenu(
+            column,
+            <section className="mb-3 block w-full break-inside-avoid rounded-lg border border-border/45 bg-card/35 p-2.5 sm:mb-4">
               <header className="flex items-center justify-between gap-2 px-1 pb-2">
                 <p className="truncate text-sm font-semibold text-foreground">
                   {column.symbol ? `${column.symbol} ` : ""}
@@ -839,7 +938,7 @@ export function ResourceBoard({
                   )
                 })}
               </div>
-            </section>
+            </section>,
           )
         })}
       </div>

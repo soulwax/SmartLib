@@ -248,8 +248,16 @@ interface SmartCategorySplitApplyResponse extends ApiErrorResponse {
     id: string;
     name: string;
   }>;
+  reusedCategories?: Array<{
+    id: string;
+    name: string;
+  }>;
   movedResources?: number;
   retainedResourceCount?: number;
+  deletedSourceCategory?: {
+    id: string;
+    name: string;
+  } | null;
 }
 
 interface SmartCategorySplitDraftGroup {
@@ -4581,9 +4589,10 @@ export default function LibraryPageClient({
 
       const movedResources = payload.movedResources ?? 0;
       const createdCount = payload.createdCategories?.length ?? 0;
+      const reusedCount = payload.reusedCategories?.length ?? 0;
       toast.success("Category split applied", {
         description: refreshed
-          ? `${movedResources} resource(s) were reorganized into ${createdCount + 1} categories.`
+          ? `${movedResources} resource(s) were reorganized with ${createdCount} new categor${createdCount === 1 ? "y" : "ies"} and ${reusedCount} existing categor${reusedCount === 1 ? "y" : "ies"}.`
           : `${movedResources} resource(s) were reorganized. Refresh once if the current view still looks stale.`,
       });
 

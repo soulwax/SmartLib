@@ -17,6 +17,7 @@ import {
 } from "@/lib/resource-repository"
 import {
   createResourceCategoryService,
+  deleteResourceCategoryService,
   listResourceCategoriesService,
   listResourcesService,
   moveResourceItemService,
@@ -121,6 +122,21 @@ async function listCategoryResources(options: {
   })
 }
 
+function dedupeCategorySummaries(
+  categories: Array<{ id: string; name: string }>
+): Array<{ id: string; name: string }> {
+  const seen = new Set<string>()
+
+  return categories.filter((category) => {
+    if (seen.has(category.id)) {
+      return false
+    }
+
+    seen.add(category.id)
+    return true
+  })
+}
+
 export async function POST(request: Request, context: RouteContext) {
   try {
     validateCSRF(request)
@@ -160,6 +176,30 @@ export async function POST(request: Request, context: RouteContext) {
       categoryName: category.name,
       resources: categoryResources,
     })
+    const siblingCategories = (
+      await listResourceCategoriesService({
+        userId: session.user.id,
+        includeAllWorkspaces: session.user.isFirstAdmin === true,
+        workspaceId: category.workspaceId,
+      })
+    ).categories.filter((item) => item.id !== category.id)
+    const siblingCategoryByName = new Map(
+      siblingCategories.map((item) => [item.name.trim().toLowerCase(), item])
+    )
+    const reusedPreviewCategories = dedupeCategorySummaries(
+      preview.groups
+        .map((group) => siblingCategoryByName.get(group.name.toLowerCase()) ?? null)
+        .filter((item): item is ResourceCategory => item !== null)
+        .map((item) => ({ id: item.id, name: item.name }))
+    )
+    const warnings = [...preview.warnings]
+    if (reusedPreviewCategories.length > 0) {
+      warnings.push(
+        `Existing categories will be reused if you apply this split: ${reusedPreviewCategories
+          .map((item) => item.name)
+          .join(", ")}.`
+      )
+    }
 
     return NextResponse.json({
       category: {
@@ -169,8 +209,9 @@ export async function POST(request: Request, context: RouteContext) {
         resourceCount: preview.resourceCount,
       },
       groups: preview.groups,
-      warnings: preview.warnings,
+      warnings: Array.from(new Set(warnings)),
       usedAi: preview.usedAi,
+      reusedCategories: reusedPreviewCategories,
     })
   } catch (error) {
     if (error instanceof CSRFValidationError) {
@@ -290,29 +331,37 @@ export async function PUT(request: Request, context: RouteContext) {
         workspaceId: category.workspaceId,
       })
     ).categories.filter((item) => item.id !== category.id)
-    const siblingCategoryNameSet = new Set(
-      siblingCategories.map((item) => item.name.trim().toLowerCase())
+    const siblingCategoryByName = new Map(
+      siblingCategories.map((item) => [item.name.trim().toLowerCase(), item])
     )
-    for (const group of nonEmptyGroups) {
-      if (group.key === retainGroup.key) {
-        continue
-      }
+    const reusableRetainConflict = siblingCategoryByName.get(
+      retainGroup.name.toLowerCase()
+    )
+    const actualRetainGroup =
+      reusableRetainConflict === undefined
+        ? retainGroup
+        : [...nonEmptyGroups]
+            .filter((group) => {
+              if (group.key === retainGroup.key) {
+                return false
+              }
 
-      if (siblingCategoryNameSet.has(group.name.toLowerCase())) {
-        return errorResponse(
-          `Category "${group.name}" already exists in this workspace.`,
-          409
-        )
-      }
-    }
+              return !siblingCategoryByName.has(group.name.toLowerCase())
+            })
+            .sort(
+              (left, right) => right.resourceIds.length - left.resourceIds.length
+            )[0] ?? null
 
     let mode: "database" | "mock" = "mock"
     let retainedCategory = category
-    if (retainGroup.name.toLowerCase() !== category.name.toLowerCase()) {
+    if (
+      actualRetainGroup &&
+      actualRetainGroup.name.toLowerCase() !== category.name.toLowerCase()
+    ) {
       const updated = await updateResourceCategoryService(
         category.id,
         {
-          name: retainGroup.name,
+          name: actualRetainGroup.name,
         },
         {
           actorUserId: session.user.id,
@@ -324,30 +373,88 @@ export async function PUT(request: Request, context: RouteContext) {
     }
 
     const createdCategories: Array<{ id: string; name: string }> = []
+    const reusedCategories: Array<{ id: string; name: string }> = []
+    const reusedCategoryIds = new Set<string>()
+    const workspaceResources = (
+      await listResourcesService({
+        userId: session.user.id,
+        workspaceId: category.workspaceId,
+        includeAllWorkspaces,
+      })
+    ).resources
+    const nextOrderByCategoryId = new Map<string, number>()
+
+    const ensureNextOrderForCategory = (targetCategory: ResourceCategory): number => {
+      const existingNextOrder = nextOrderByCategoryId.get(targetCategory.id)
+      if (existingNextOrder !== undefined) {
+        const nextOrder = existingNextOrder + RESOURCE_ORDER_STEP
+        nextOrderByCategoryId.set(targetCategory.id, nextOrder)
+        return nextOrder
+      }
+
+      let maxOrder = 0
+      const normalizedTargetName = targetCategory.name.trim().toLowerCase()
+      for (const resource of workspaceResources) {
+        const belongsToTarget =
+          resource.categoryId === targetCategory.id ||
+          (!resource.categoryId &&
+            resource.category.trim().toLowerCase() === normalizedTargetName)
+
+        if (!belongsToTarget) {
+          continue
+        }
+
+        const order = typeof resource.order === "number" ? resource.order : 0
+        if (order > maxOrder) {
+          maxOrder = order
+        }
+      }
+
+      const nextOrder = maxOrder + RESOURCE_ORDER_STEP
+      nextOrderByCategoryId.set(targetCategory.id, nextOrder)
+      return nextOrder
+    }
 
     for (const group of nonEmptyGroups) {
-      if (group.key === retainGroup.key) {
+      if (actualRetainGroup && group.key === actualRetainGroup.key) {
         continue
       }
 
-      const created = await createResourceCategoryService(group.name, null, {
-        workspaceId: category.workspaceId,
-        ownerUserId: session.user.id,
-        includeAllWorkspaces,
-      })
-      mode = created.mode
-      createdCategories.push({
-        id: created.category.id,
-        name: created.category.name,
-      })
+      const existingCategory = siblingCategoryByName.get(group.name.toLowerCase()) ?? null
+      let targetCategory: ResourceCategory
+
+      if (existingCategory) {
+        targetCategory = existingCategory
+      } else {
+        const created = await createResourceCategoryService(group.name, null, {
+          workspaceId: category.workspaceId,
+          ownerUserId: session.user.id,
+          includeAllWorkspaces,
+        })
+        mode = created.mode
+        targetCategory = created.category
+
+        createdCategories.push({
+          id: targetCategory.id,
+          name: targetCategory.name,
+        })
+      }
+
+      if (existingCategory && !reusedCategoryIds.has(existingCategory.id)) {
+        reusedCategoryIds.add(existingCategory.id)
+        reusedCategories.push({
+          id: existingCategory.id,
+          name: existingCategory.name,
+        })
+      }
 
       for (let index = 0; index < group.resourceIds.length; index += 1) {
         await moveResourceItemService(
           {
             itemId: group.resourceIds[index],
             sourceCategoryId: category.id,
-            targetCategoryId: created.category.id,
-            newOrder: (index + 1) * RESOURCE_ORDER_STEP,
+            targetCategoryId: targetCategory.id,
+            newOrder: ensureNextOrderForCategory(targetCategory),
           },
           {
             actorUserId: session.user.id,
@@ -358,16 +465,52 @@ export async function PUT(request: Request, context: RouteContext) {
       }
     }
 
+    let focusCategory = actualRetainGroup ? retainedCategory : null
+    let deletedSourceCategory: { id: string; name: string } | null = null
+
+    if (!actualRetainGroup) {
+      const deleteResult = await deleteResourceCategoryService(category.id, {
+        actorUserId: session.user.id,
+        includeAllWorkspaces,
+      })
+      mode = deleteResult.mode
+      deletedSourceCategory = {
+        id: deleteResult.deletedCategory.id,
+        name: deleteResult.deletedCategory.name,
+      }
+      const fallbackFocusCategory =
+        reusableRetainConflict ??
+        reusedCategories
+          .map((item) => siblingCategories.find((categoryItem) => categoryItem.id === item.id) ?? null)
+          .find((item): item is ResourceCategory => item !== null) ??
+        siblingCategories.find((item) => item.name.toLowerCase() === retainGroup.name.toLowerCase()) ??
+        null
+
+      focusCategory =
+        fallbackFocusCategory ??
+        (createdCategories.length > 0
+          ? {
+              id: createdCategories[0].id,
+              name: createdCategories[0].name,
+              workspaceId: category.workspaceId,
+            }
+          : retainedCategory)
+    }
+
+    const resolvedFocusCategory = focusCategory ?? retainedCategory
+
     return NextResponse.json({
       mode,
       category: {
-        id: retainedCategory.id,
-        name: retainedCategory.name,
-        workspaceId: retainedCategory.workspaceId,
+        id: resolvedFocusCategory.id,
+        name: resolvedFocusCategory.name,
+        workspaceId: resolvedFocusCategory.workspaceId,
       },
       createdCategories,
+      reusedCategories,
       movedResources,
-      retainedResourceCount: retainGroup.resourceIds.length,
+      retainedResourceCount: actualRetainGroup?.resourceIds.length ?? 0,
+      deletedSourceCategory,
     })
   } catch (error) {
     if (error instanceof CSRFValidationError) {

@@ -6,20 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-03-15
+
 ### Added
 
 - New role-boundary verification matrix and automated guard checker (`docs/role-boundary-verification-matrix.md`, `scripts/verify-role-boundaries.mjs`, `pnpm verify:role-boundaries`)
-- New logical backup/restore tooling with backup drill and verification commands (`scripts/db-backup-restore.mjs`, `pnpm db:backup*`, `pnpm db:restore`)
-- New backup/restore runbook documenting operational drill and restore steps (`docs/backup-restore-runbook.md`)
-- New backup/restore drill report including successful disposable-target restore validation (`docs/backup-restore-drill-2026-02-28.md`)
+- New logical backup/restore tooling with backup drill and verification commands, plus supporting runbook/drill documentation (`scripts/db-backup-restore.mjs`, `docs/backup-restore-runbook.md`, `docs/backup-restore-drill-2026-02-28.md`)
+- New favicon cache observability and smarter refresh/discovery flows, including admin snapshot reporting for cached and due-for-refresh hostnames
+- New Toby JSON import workflow with current/new workspace targeting, preview, exact-duplicate detection, import history, and rollback
+- New shared AI provider plumbing plus AI-assisted category split previews with a review/apply workflow
+- New richer context menus across workspace/category surfaces and desktop workspace-rail resizing for denser Explorer-like navigation
 
 ### Changed
 
-- Standardized API error payloads across all route handlers to a typed contract: `{ ok: false, error, code, details? }`
+- Standardized API error payloads across route handlers to a typed contract: `{ ok: false, error, code, details? }`
 - Added shared API error utilities (`lib/api-error.ts`) and migrated route-level validation/error branches to consistent status-code + error-code responses
 - Normalized rate-limit responses to include a stable `RATE_LIMITED` error code while preserving existing retry headers
-- Added `backups/` to `.gitignore` to prevent accidental snapshot commits
-- Documented and executed full restore drill on a disposable Neon target (with post-restore row-count parity checks)
+- Library bootstrap, location persistence, and organization/workspace/category navigation were refined for faster loading and more compact Toby-like workflows
+- AI features now use the shared provider/config path from `gemini.json`, while the visible UX remains vendor-neutral
+- Vercel build flow can now run database migrations before building when `DATABASE_URL_UNPOOLED` is available
+
+### Fixed
+
+- Toby import now handles workspace validation, preview/import feedback, duplicate handling, and rollback edge cases more reliably
+- Favicon cache revalidation now behaves more predictably with lazy refresh scheduling and broader fallback handling for weak sources
+- Smart category splitting now retries with a more lenient pass and broader fallback buckets before giving up on low-signal categories
+- Updated Next.js dependency specifier handling to avoid frozen-lockfile build failures on Vercel
 
 ## [0.2.10] - 2026-02-28
 
